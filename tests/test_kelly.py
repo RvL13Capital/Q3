@@ -1,0 +1,177 @@
+"""
+Unit tests for Kelly sizing and portfolio construction.
+No external API calls or DuckDB needed.
+"""
+import pytest
+import pandas as pd
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.portfolio.kelly import kelly_fraction
+from src.portfolio.construction import apply_constraints
+
+# ────────────────────────────────────────────────────────────────────────────
+# Kelly formula tests
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_kelly_basic():
+    """μ=0.15, σ=0.30, rf=0.04 → f* = 0.25*(0.15-0.04)/0.09 ≈ 0.306"""
+    f = kelly_fraction(mu=0.15, sigma=0.30, rf=0.04, fraction=0.25)
+    expected = 0.25 * (0.15 - 0.04) / (0.30 ** 2)
+    assert f == pytest.approx(expected, abs=1e-6)
+    assert 0 < f < 1
+
+
+def test_kelly_zero_excess_return():
+    """When μ == rf, f* = 0."""
+    f = kelly_fraction(mu=0.04, sigma=0.25, rf=0.04, fraction=0.25)
+    assert f == 0.0
+
+
+def test_kelly_negative_excess_return():
+    """When μ < rf, f* = 0 (no short selling)."""
+    f = kelly_fraction(mu=0.02, sigma=0.25, rf=0.04, fraction=0.25)
+    assert f == 0.0
+
+
+def test_kelly_clamped_high():
+    """Extreme signal → raw Kelly > 1 → clamped to 1.0."""
+    f = kelly_fraction(mu=0.50, sigma=0.10, rf=0.04, fraction=0.25)
+    assert f == 1.0
+
+
+def test_kelly_zero_sigma():
+    """σ = 0 → return 0 (avoid division by zero)."""
+    f = kelly_fraction(mu=0.15, sigma=0.0, rf=0.04, fraction=0.25)
+    assert f == 0.0
+
+
+def test_kelly_full_fraction():
+    """fraction=1.0 should give 4x the 0.25 fraction result."""
+    f1 = kelly_fraction(mu=0.15, sigma=0.30, rf=0.04, fraction=0.25)
+    f4 = kelly_fraction(mu=0.15, sigma=0.30, rf=0.04, fraction=1.0)
+    assert f4 == pytest.approx(min(1.0, 4 * f1), abs=1e-6)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Portfolio construction constraint tests
+# ────────────────────────────────────────────────────────────────────────────
+
+PARAMS = {
+    "kelly": {
+        "fraction": 0.25,
+        "max_position": 0.08,
+        "max_bucket":   0.35,
+        "min_position": 0.02,
+        "cash_reserve": 0.10,
+    }
+}
+
+
+def make_kelly_df(rows):
+    """Helper to create a kelly_df-style DataFrame."""
+    return pd.DataFrame(rows)
+
+
+def test_constraints_single_position():
+    """One stock, 15% raw Kelly → capped to 8%."""
+    df = make_kelly_df([
+        {"ticker": "A", "kelly_25pct": 0.15, "primary_bucket": "grid", "composite_score": 0.7, "kelly_raw": 0.15}
+    ])
+    result = apply_constraints(df, PARAMS)
+    assert len(result) == 1
+    assert result.iloc[0]["weight"] == pytest.approx(0.08)
+    assert bool(result.iloc[0]["is_constrained"]) is True
+
+
+def test_constraints_bucket_cap():
+    """4 stocks in same bucket, each 12% Kelly → bucket capped to 35%."""
+    df = make_kelly_df([
+        {"ticker": f"A{i}", "kelly_25pct": 0.12, "primary_bucket": "defense", "composite_score": 0.7, "kelly_raw": 0.12}
+        for i in range(4)
+    ])
+    result = apply_constraints(df, PARAMS)
+    bucket_total = result["weight"].sum()
+    assert bucket_total <= 0.35 + 1e-6
+
+
+def test_constraints_stock_cap_after_bucket_scale():
+    """After bucket scaling, no stock exceeds 8%."""
+    df = make_kelly_df([
+        {"ticker": f"A{i}", "kelly_25pct": 0.12, "primary_bucket": "defense", "composite_score": 0.7, "kelly_raw": 0.12}
+        for i in range(4)
+    ])
+    result = apply_constraints(df, PARAMS)
+    assert (result["weight"] <= 0.08 + 1e-6).all()
+
+
+def test_constraints_cash_floor():
+    """Total weights sum to ≤ 90% (cash_reserve = 10%)."""
+    df = make_kelly_df([
+        {"ticker": f"A{i}", "kelly_25pct": 0.08, "primary_bucket": f"b{i}", "composite_score": 0.7, "kelly_raw": 0.08}
+        for i in range(12)  # 12 * 8% = 96% > 90%
+    ])
+    result = apply_constraints(df, PARAMS)
+    total = result["weight"].sum()
+    assert total <= 0.90 + 1e-6
+
+
+def test_constraints_min_position_drop():
+    """Stocks that fall below 2% after scaling are dropped."""
+    df = make_kelly_df([
+        {"ticker": "A", "kelly_25pct": 0.08, "primary_bucket": "grid", "composite_score": 0.8, "kelly_raw": 0.08},
+        {"ticker": "B", "kelly_25pct": 0.015, "primary_bucket": "water", "composite_score": 0.56, "kelly_raw": 0.015},  # below min
+    ])
+    result = apply_constraints(df, PARAMS)
+    assert "B" not in result["ticker"].values
+
+
+def test_constraints_empty_input():
+    """Empty DataFrame → empty result."""
+    df = pd.DataFrame(columns=["ticker", "kelly_25pct", "primary_bucket"])
+    result = apply_constraints(df, PARAMS)
+    assert result.empty
+
+
+def test_constraints_multi_bucket():
+    """Two buckets each with stocks — constraints respected per bucket."""
+    rows = []
+    for i in range(5):
+        rows.append({"ticker": f"G{i}", "kelly_25pct": 0.09, "primary_bucket": "grid", "composite_score": 0.7, "kelly_raw": 0.09})
+    for i in range(3):
+        rows.append({"ticker": f"D{i}", "kelly_25pct": 0.08, "primary_bucket": "defense", "composite_score": 0.68, "kelly_raw": 0.08})
+    df = make_kelly_df(rows)
+    result = apply_constraints(df, PARAMS)
+
+    # Grid bucket total ≤ 35%
+    grid_total = result[result["primary_bucket"] == "grid"]["weight"].sum()
+    assert grid_total <= 0.35 + 1e-6
+
+    # Defense bucket total ≤ 35%
+    def_total = result[result["primary_bucket"] == "defense"]["weight"].sum()
+    assert def_total <= 0.35 + 1e-6
+
+    # Cash floor
+    assert result["weight"].sum() <= 0.90 + 1e-6
+
+
+def test_constraints_idempotent():
+    """Calling apply_constraints twice gives the same result (weights already satisfy constraints)."""
+    df = make_kelly_df([
+        {"ticker": f"A{i}", "kelly_25pct": 0.07, "primary_bucket": f"b{i%3}", "composite_score": 0.6, "kelly_raw": 0.07}
+        for i in range(8)
+    ])
+    result1 = apply_constraints(df, PARAMS)
+    # Build a fresh df from result1's constrained weights as the new kelly_25pct
+    df2 = make_kelly_df([
+        {"ticker": row["ticker"], "kelly_25pct": row["weight"],
+         "primary_bucket": row["primary_bucket"], "composite_score": row.get("composite_score", 0.6), "kelly_raw": row["weight"]}
+        for _, row in result1.iterrows()
+    ])
+    result2 = apply_constraints(df2, PARAMS)
+    # Weights should be the same (already within all constraints)
+    w1 = result1.set_index("ticker")["weight"].sort_index()
+    w2 = result2.set_index("ticker")["weight"].sort_index()
+    assert (abs(w1 - w2) < 0.001).all()
