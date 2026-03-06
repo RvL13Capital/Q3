@@ -149,27 +149,13 @@ def run_weekly_pipeline(
     from src.data.db           import upsert_signal_scores
 
     if not scored_df.empty:
-        sigma_updates = []
+        # Estimate sigma for entry candidates and write back into scored_df
+        sigma_map: dict[str, float] = {}
         for _, row in scored_df[scored_df["entry_signal"] == True].iterrows():
-            sigma, valid = estimate_sigma(row["ticker"], conn, as_of_date)
-            sigma_updates.append({
-                "ticker":         row["ticker"],
-                "score_date":     as_of_date,
-                "sigma_estimate": round(sigma, 4),
-            })
-        if sigma_updates:
-            import pandas as pd
-            sigma_df = pd.DataFrame(sigma_updates)
-            # Merge back into scored_df for reporting
-            scored_df = scored_df.merge(
-                sigma_df.rename(columns={"sigma_estimate": "sigma_est_new"}),
-                on="ticker", how="left"
-            )
-            if "sigma_est_new" in scored_df.columns:
-                scored_df["sigma_estimate"] = scored_df.get("sigma_estimate", None)
-                mask = scored_df["sigma_est_new"].notna()
-                scored_df.loc[mask, "sigma_estimate"] = scored_df.loc[mask, "sigma_est_new"]
-                scored_df = scored_df.drop(columns=["sigma_est_new"])
+            sigma, _ = estimate_sigma(row["ticker"], conn, as_of_date)
+            sigma_map[row["ticker"]] = round(sigma, 4)
+        if sigma_map:
+            scored_df["sigma_estimate"] = scored_df["ticker"].map(sigma_map)
 
     # ── 5. Reporting ─────────────────────────────────────────────────────────
     logger.info("── Generating weekly report ──")

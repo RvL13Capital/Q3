@@ -257,9 +257,14 @@ def update_prices(
 
         if df.empty and eodhd_api_key:
             # Fallback: only EU tickers with eodhd mapping
-            eu_tickers = [t for t in group_tickers
-                          if universe_df[universe_df["ticker"] == t]["region"].values[0:1] == ["EU"]
-                          and t in eodhd_map]
+            eu_tickers = [
+                t for t in group_tickers
+                if t in eodhd_map
+                and (
+                    len(universe_df[universe_df["ticker"] == t]) > 0
+                    and universe_df[universe_df["ticker"] == t]["region"].values[0] == "EU"
+                )
+            ]
             if eu_tickers:
                 eodhd_input = {t: eodhd_map[t] for t in eu_tickers}
                 df = fetch_prices_eodhd(eodhd_input, start, today, eodhd_api_key)

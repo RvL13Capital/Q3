@@ -272,14 +272,27 @@ def get_latest_price_date(conn: duckdb.DuckDBPyConnection, ticker: str) -> Optio
 # Fundamental helpers
 # ---------------------------------------------------------------------------
 
+_ANNUAL_SCHEMA_COLS = [
+    "ticker", "fiscal_year", "report_date", "revenue", "gross_profit", "ebit",
+    "net_income", "interest_expense", "tax_expense", "total_assets", "total_equity",
+    "total_debt", "cash", "goodwill", "intangible_assets", "right_of_use_assets",
+    "lease_liabilities", "capex", "gross_margin", "invested_capital", "nopat",
+    "roic", "effective_tax_rate", "currency", "accounting_std", "source",
+]
+
+
 def upsert_fundamentals_annual(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> int:
     if df.empty:
         return 0
-    conn.execute("""
-        INSERT OR REPLACE INTO fundamentals_annual
-        SELECT * FROM df
+    # Only include columns that exist in the schema (exclude auto-default fetched_at)
+    present = [c for c in _ANNUAL_SCHEMA_COLS if c in df.columns]
+    df_insert = df[present].copy()
+    cols_sql = ", ".join(present)
+    conn.execute(f"""
+        INSERT OR REPLACE INTO fundamentals_annual ({cols_sql})
+        SELECT {cols_sql} FROM df_insert
     """)
-    return len(df)
+    return len(df_insert)
 
 
 def upsert_fundamentals_quarterly(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> int:
