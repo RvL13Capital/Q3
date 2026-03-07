@@ -18,6 +18,14 @@ on:
         description: "Dry run (no DB writes)"
         required: false
         default: "false"
+      skip_fetch:
+        description: "Skip data fetch, use only cached DB data"
+        required: false
+        default: "false"
+      fetch_trends:
+        description: "Also fetch Google Trends (slow, ~5s per keyword)"
+        required: false
+        default: "false"
 
 jobs:
   run-pipeline:
@@ -50,6 +58,12 @@ jobs:
           fi
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             ARGS="$ARGS --dry-run"
+          fi
+          if [ "${{ github.event.inputs.skip_fetch }}" = "true" ]; then
+            ARGS="$ARGS --skip-fetch"
+          fi
+          if [ "${{ github.event.inputs.fetch_trends }}" = "true" ]; then
+            ARGS="$ARGS --trends"
           fi
           python src/main.py $ARGS
 

@@ -174,6 +174,7 @@ def generate_weekly_actions(
     universe_df: pd.DataFrame,
     params: dict,
     as_of_date: str,
+    dry_run: bool = False,
 ) -> dict:
     """
     Top-level monitor function.
@@ -195,7 +196,7 @@ def generate_weekly_actions(
 
     # Construct the new target portfolio
     new_portfolio = construct_portfolio(
-        conn, scored_df, universe_df, params, as_of_date
+        conn, scored_df, universe_df, params, as_of_date, dry_run=dry_run
     )
 
     # Diff: what changed vs last week
