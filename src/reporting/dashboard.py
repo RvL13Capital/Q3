@@ -38,19 +38,25 @@ def get_conn():
 
 @st.cache_data(ttl=300)
 def load_data():
-    """Load portfolio and scores from DuckDB if available, else fall back to CSV snapshots."""
+    """Load portfolio and scores from DuckDB if available, else fall back to CSV snapshots.
+
+    Returns (portfolio, scores, universe, is_mock) where is_mock=True means the
+    data comes from the committed seed CSVs, not a live pipeline run.
+    """
     if DB_PATH.exists():
         conn      = get_conn()
         portfolio = get_latest_portfolio(conn)
         scores    = get_latest_signal_scores(conn)
+        is_mock   = False
     else:
         port_csv   = SNAPSHOT_DIR / "latest_portfolio.csv"
         scores_csv = SNAPSHOT_DIR / "latest_scores.csv"
         portfolio  = pd.read_csv(port_csv)   if port_csv.exists()   else pd.DataFrame()
         scores     = pd.read_csv(scores_csv) if scores_csv.exists() else pd.DataFrame()
+        is_mock    = True
 
     universe = load_universe()
-    return portfolio, scores, universe
+    return portfolio, scores, universe, is_mock
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +184,10 @@ def build_exit_monitor_display(
 # Streamlit layout
 # ---------------------------------------------------------------------------
 
+def _mock_caption():
+    st.caption("_Mock data — not from a live pipeline run._")
+
+
 def run_dashboard():
     st.set_page_config(
         page_title="EARKE Quant 3.0",
@@ -186,7 +196,15 @@ def run_dashboard():
     )
     st.title("EARKE Quant 3.0 — Megatrend Monitor")
 
-    portfolio, scores, universe = load_data()
+    portfolio, scores, universe, is_mock = load_data()
+
+    if is_mock:
+        st.warning(
+            "⚠️ **Mock data** — scores below are randomly generated placeholders using real "
+            "universe tickers. They will be replaced with live values after the first "
+            "weekly pipeline run.",
+            icon=None,
+        )
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "📈 Portfolio", "🔍 Signal Deep Dive", "🌍 Universe Scanner", "🚨 Exit Monitor"
@@ -212,6 +230,8 @@ def run_dashboard():
                 build_portfolio_display(portfolio, scores),
                 use_container_width=True,
             )
+            if is_mock:
+                _mock_caption()
 
             # Bucket allocation chart
             bucket_col = ("primary_bucket" if "primary_bucket" in portfolio.columns
@@ -230,6 +250,8 @@ def run_dashboard():
                     st.altair_chart(chart, use_container_width=True)
                 except ImportError:
                     st.bar_chart(bucket_agg.set_index(bucket_col)["weight"])
+                if is_mock:
+                    _mock_caption()
 
     # ────────────────────────────────────────────────────────────────────────
     # TAB 2: Signal Deep Dive
@@ -279,6 +301,8 @@ def run_dashboard():
                         _fmt_sizing(row.get("kelly_25pct")),
                     ],
                 }))
+                if is_mock:
+                    _mock_caption()
 
     # ────────────────────────────────────────────────────────────────────────
     # TAB 3: Universe Scanner
@@ -306,6 +330,8 @@ def run_dashboard():
                 & scanner_df["primary_bucket"].isin(bucket_filter)
             ]
             st.dataframe(filtered, use_container_width=True)
+            if is_mock:
+                _mock_caption()
 
     # ────────────────────────────────────────────────────────────────────────
     # TAB 4: Exit Monitor
@@ -317,11 +343,15 @@ def run_dashboard():
             st.info("No portfolio or signal data yet.")
         else:
             st.dataframe(display, use_container_width=True)
+            if is_mock:
+                _mock_caption()
 
             st.subheader("Crowding Score Distribution (Held Positions)")
             crowd_data = display[["ticker", "crowding_score"]].dropna()
             if not crowd_data.empty:
                 st.bar_chart(crowd_data.set_index("ticker")["crowding_score"])
+                if is_mock:
+                    _mock_caption()
 
             if n_red:
                 st.error(f"🔴 {n_red} position(s) have triggered the EXIT threshold!")
