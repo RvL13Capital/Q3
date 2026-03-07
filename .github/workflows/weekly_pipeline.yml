@@ -43,6 +43,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Restore DB cache
+        uses: actions/cache@v4
+        with:
+          path: data/q3.duckdb
+          key: q3-db-${{ runner.os }}
+          restore-keys: q3-db-
+
       - name: Run weekly pipeline
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
@@ -66,6 +73,13 @@ jobs:
             ARGS="$ARGS --trends"
           fi
           python src/main.py $ARGS
+
+      - name: Save DB cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/q3.duckdb
+          key: q3-db-${{ runner.os }}
 
       - name: Upload weekly report
         if: always()
