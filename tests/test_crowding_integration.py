@@ -308,8 +308,19 @@ def test_crowding_score_keys(conn, prices_etn, prices_spy, params):
         assert key in result
 
 
-def test_crowding_score_no_price_data(conn, params):
+def test_crowding_score_no_price_data(conn, params, monkeypatch):
     """No price data → all sub-scores neutral → crowding = 0.5."""
+    import types
+    fake_yf = types.ModuleType("yfinance")
+
+    class _Ticker:
+        @property
+        def info(self):
+            return {}
+
+    fake_yf.Ticker = lambda t: _Ticker()
+    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
+
     result = compute_crowding_score(
         "ETN", None, None, "SPY", conn, params, AS_OF, "US"
     )
