@@ -286,11 +286,6 @@ h3 {
 [data-testid="stMetricDelta"] { font-size: 0.7rem !important; }
 
 /* ── Dataframe / table ───────────────────────────────────────── */
-[data-testid="stDataFrame"] iframe,
-[data-testid="stDataFrame"] div {
-    background: #04080f !important;
-    color: #a8c4e0 !important;
-}
 .stDataFrame { border: 1px solid #0d2a4a !important; }
 
 /* ── Selectbox / multiselect ─────────────────────────────────── */
@@ -573,10 +568,12 @@ def run_dashboard():
             with dc1:
                 st.markdown('<div style="font-size:0.65rem;font-family:\'Share Tech Mono\',monospace;color:#4a8aac;letter-spacing:0.2em;margin-bottom:4px">COMPOSITE SCORE</div>', unsafe_allow_html=True)
                 hist_comp = scores["composite_score"].value_counts(bins=15, sort=False).sort_index()
+                hist_comp.index = [f"{i.left:.2f}–{i.right:.2f}" for i in hist_comp.index]
                 st.bar_chart(hist_comp, use_container_width=True, height=130)
             with dc2:
                 st.markdown('<div style="font-size:0.65rem;font-family:\'Share Tech Mono\',monospace;color:#4a8aac;letter-spacing:0.2em;margin-bottom:4px">CROWDING SCORE</div>', unsafe_allow_html=True)
                 hist_crowd = scores["crowding_score"].value_counts(bins=15, sort=False).sort_index()
+                hist_crowd.index = [f"{i.left:.2f}–{i.right:.2f}" for i in hist_crowd.index]
                 st.bar_chart(hist_crowd, use_container_width=True, height=130)
 
     # ── SCANNER ──────────────────────────────────────────────────────────
