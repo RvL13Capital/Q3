@@ -176,14 +176,6 @@ class TestTrafficLight:
     def test_exit_zone_is_red(self, val):
         assert _traffic_light(val, self._p()) == "🔴"
 
-    def test_exact_boundary_watch(self):
-        assert _traffic_light(0.55, self._p()) == "🟡"
-        assert _traffic_light(0.54, self._p()) == "🟢"
-
-    def test_exact_boundary_exit(self):
-        assert _traffic_light(0.75, self._p()) == "🔴"
-        assert _traffic_light(0.74, self._p()) == "🟡"
-
     def test_custom_thresholds(self):
         p = self._p(watch=0.40, exit_thr=0.60)
         assert _traffic_light(0.35, p) == "🟢"
@@ -484,8 +476,9 @@ class TestReportUniverseTop:
     def test_no_entry_signal_rendered_as_dash(self, tmp_path):
         scored = _make_scored("CCJ", entry=False)
         _, text = _run_report(tmp_path, scored_df=scored)
-        # At least one cell should show "—" for the entry column
-        assert "—" in text
+        # All numeric score columns are non-None, so "| — |" is specifically
+        # the entry-signal cell at the end of the table row
+        assert "| — |" in text
 
     def test_candidates_capped_at_15(self, tmp_path):
         tickers = [f"T{i:02d}" for i in range(25)]

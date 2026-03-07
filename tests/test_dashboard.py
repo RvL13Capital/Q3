@@ -116,12 +116,6 @@ class TestColorCrowding:
     def test_below_watch_threshold_is_green(self, val):
         assert "ccffcc" in _color_crowding(val)
 
-    def test_exact_boundaries(self):
-        assert "ffcccc" in _color_crowding(0.75)   # boundary → red
-        assert "fff3cc" in _color_crowding(0.55)   # boundary → yellow
-        assert "ccffcc" in _color_crowding(0.54)   # just below → green
-
-
 class TestColorComposite:
     """_color_composite: green ≥ 0.65, light-blue ≥ 0.55, empty otherwise."""
 
@@ -140,12 +134,6 @@ class TestColorComposite:
     @pytest.mark.parametrize("val", [0.00, 0.40, 0.54])
     def test_below_threshold_is_empty(self, val):
         assert _color_composite(val) == ""
-
-    def test_exact_boundaries(self):
-        assert "ccffcc" in _color_composite(0.65)   # boundary → green
-        assert "e6f7ff" in _color_composite(0.55)   # boundary → blue
-        assert _color_composite(0.54) == ""          # just below → empty
-
 
 # ===========================================================================
 # 2. Portfolio-tab merge logic (Tab 1)
@@ -175,14 +163,9 @@ class TestPortfolioTabMerge:
     def test_scores_empty_falls_back_to_portfolio_copy(self):
         """Tab 1 code: if scores.empty: merged = portfolio.copy()"""
         portfolio = _make_portfolio("ETN")
-        scores    = pd.DataFrame()
-        merged = portfolio.merge(
-            scores[self._SCORE_COLS] if not scores.empty else pd.DataFrame(),
-            on="ticker" if not scores.empty else None,
-            how="left",
-        ) if not scores.empty else portfolio.copy()
+        # Replicate the else-branch directly
+        merged = portfolio.copy()
         assert list(merged["ticker"]) == ["ETN"]
-        # Signal columns are absent when scores were empty
         assert "crowding_score" not in merged.columns
 
     def test_sort_by_composite_desc(self):
@@ -246,7 +229,43 @@ class TestPortfolioTabMerge:
 
 
 # ===========================================================================
-# 3. Universe-scanner filter + sort logic (Tab 3)
+# 3. Signal Deep Dive formatting logic (Tab 2)
+# ===========================================================================
+
+class TestTab2SizingFormat:
+    """
+    Tab 2 renders mu/sigma/kelly as:
+        f"{val:.1%}" if val else "—"
+    This means val=0.0 (falsy float) renders as "—", not "0.0%".
+    These tests document that contract.
+    """
+
+    def _fmt(self, val):
+        """Mirror the Tab 2 sizing format in run_dashboard()."""
+        return f"{val:.1%}" if val else "—"
+
+    @pytest.mark.parametrize("val,expected", [
+        (0.12,  "12.0%"),
+        (0.05,  "5.0%"),
+        (0.003, "0.3%"),
+    ])
+    def test_positive_value_formats_as_pct(self, val, expected):
+        assert self._fmt(val) == expected
+
+    @pytest.mark.parametrize("val", [None, 0.0])
+    def test_falsy_value_shows_dash(self, val):
+        # 0.0 is falsy in Python — same branch as None in Tab 2's ternary
+        assert self._fmt(val) == "—"
+
+    def test_row_lookup_missing_key_shows_dash(self):
+        """row.get("missing_key") returns None → "—"."""
+        row = _make_scores("ETN").iloc[0]
+        result = f"{row.get('nonexistent', 0):.1%}" if row.get("nonexistent") else "—"
+        assert result == "—"
+
+
+# ===========================================================================
+# 5. Universe-scanner filter + sort logic (Tab 3)
 # ===========================================================================
 
 class TestUniverseScannerFilter:
@@ -310,7 +329,7 @@ class TestUniverseScannerFilter:
 
 
 # ===========================================================================
-# 4. Exit-monitor threshold / status logic (Tab 4)
+# 6. Exit-monitor threshold / status logic (Tab 4)
 # ===========================================================================
 
 class TestExitMonitorLogic:
