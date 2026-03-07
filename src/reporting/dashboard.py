@@ -126,7 +126,7 @@ def build_portfolio_display(portfolio: pd.DataFrame, scores: pd.DataFrame) -> pd
     display_cols = ["ticker", "weight", "composite_score", "quality_score", "crowding_score"]
     display_cols = [c for c in display_cols if c in merged.columns]
     display_df = merged[display_cols].copy()
-    display_df["weight"] = display_df["weight"].map(lambda x: f"{x:.1%}")
+    display_df["weight"] = display_df["weight"].map(lambda x: f"{x:.1%}" if pd.notna(x) else "—")
 
     if "composite_score" in display_df.columns:
         display_df = display_df.sort_values("composite_score", ascending=False)
@@ -147,7 +147,11 @@ def build_scanner_display(scores: pd.DataFrame, universe: pd.DataFrame) -> pd.Da
                     "composite_score", "physical_norm",
                     "quality_score", "crowding_score", "entry_signal"]
     display_cols = [c for c in display_cols if c in merged.columns]
-    return merged[display_cols].reset_index(drop=True)
+    result = merged[display_cols].reset_index(drop=True)
+    # ensure entry_signal is bool-safe for Arrow serialization
+    if "entry_signal" in result.columns:
+        result["entry_signal"] = result["entry_signal"].fillna(False).astype(bool)
+    return result
 
 
 def build_exit_monitor_display(
@@ -535,7 +539,7 @@ def run_dashboard():
             if portfolio.empty:
                 st.info("No portfolio data.")
             else:
-                st.dataframe(build_portfolio_display(portfolio, scores), use_container_width=True, height=360)
+                st.dataframe(build_portfolio_display(portfolio, scores), use_container_width=True)
 
         with col_right:
             st.markdown('<div style="font-size:0.65rem;font-family:\'Share Tech Mono\',monospace;'
@@ -619,7 +623,7 @@ def run_dashboard():
                 col.markdown(_stat_card(lbl, str(val), accent=acc), unsafe_allow_html=True)
 
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-            st.dataframe(filtered, use_container_width=True, height=480)
+            st.dataframe(filtered, use_container_width=True)
 
             # top 10 entry signals callout
             if "entry_signal" in filtered.columns:
@@ -774,7 +778,7 @@ def run_dashboard():
             al, ar = st.columns([3, 2])
             with al:
                 st.markdown(_section_header("POSITION CROWDING TABLE"), unsafe_allow_html=True)
-                st.dataframe(display_alerts, use_container_width=True, height=400)
+                st.dataframe(display_alerts, use_container_width=True)
 
             with ar:
                 st.markdown(_section_header("CROWDING DISTRIBUTION"), unsafe_allow_html=True)
