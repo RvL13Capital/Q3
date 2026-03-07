@@ -1,0 +1,76 @@
+name: Weekly Pipeline
+
+on:
+  schedule:
+    # Every Monday at 09:00 UTC (market open Europe)
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Run date (YYYY-MM-DD). Defaults to today."
+        required: false
+        default: ""
+      force_refresh:
+        description: "Force re-fetch all data"
+        required: false
+        default: "false"
+      dry_run:
+        description: "Dry run (no DB writes)"
+        required: false
+        default: "false"
+      skip_fetch:
+        description: "Skip data fetch, use only cached DB data"
+        required: false
+        default: "false"
+      fetch_trends:
+        description: "Also fetch Google Trends (slow, ~5s per keyword)"
+        required: false
+        default: "false"
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run weekly pipeline
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+          EODHD_API_KEY_2: ${{ secrets.EODHD_API_KEY_2 }}
+        run: |
+          ARGS=""
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            ARGS="$ARGS --date ${{ github.event.inputs.date }}"
+          fi
+          if [ "${{ github.event.inputs.force_refresh }}" = "true" ]; then
+            ARGS="$ARGS --force-refresh"
+          fi
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ "${{ github.event.inputs.skip_fetch }}" = "true" ]; then
+            ARGS="$ARGS --skip-fetch"
+          fi
+          if [ "${{ github.event.inputs.fetch_trends }}" = "true" ]; then
+            ARGS="$ARGS --trends"
+          fi
+          python src/main.py $ARGS
+
+      - name: Upload weekly report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-report-${{ github.run_id }}
+          path: reports/*.md
+          retention-days: 90

@@ -562,3 +562,20 @@ class TestGenerateWeeklyActions:
         if not exits.empty:
             triggered = exits[exits["exit_triggered"] == True]
             assert len(triggered) > 0
+
+    def test_dry_run_not_persisted(self, conn, sample_universe, all_prices, params):
+        """dry_run=True must propagate to construct_portfolio so no snapshot is written."""
+        upsert_prices(conn, all_prices)
+        _insert_macro(conn, params)
+        scored = _make_scored_df(("ETN", 0.72, True))
+        upsert_signal_scores(conn, scored)
+
+        actions = generate_weekly_actions(
+            conn, scored, sample_universe, params, AS_OF, dry_run=True
+        )
+
+        # Portfolio is returned in-memory but must NOT be persisted to DB
+        portfolio = get_latest_portfolio(conn)
+        assert portfolio.empty, "dry_run=True must not write a portfolio snapshot"
+        # The in-memory result is still returned for reporting
+        assert "new_portfolio" in actions

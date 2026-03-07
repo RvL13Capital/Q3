@@ -148,7 +148,7 @@ def run_weekly_pipeline(
     logger.info("── Running portfolio construction & event detection ──")
     from src.portfolio.monitor import generate_weekly_actions
 
-    actions = generate_weekly_actions(conn, scored_df, universe, params, as_of_date)
+    actions = generate_weekly_actions(conn, scored_df, universe, params, as_of_date, dry_run=dry_run)
 
     # Also run sigma estimation and update signal_scores with kelly weights
     from src.portfolio.kelly   import estimate_sigma
