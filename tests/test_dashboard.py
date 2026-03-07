@@ -4,10 +4,12 @@ Tests for dashboard query / transformation logic.
 streamlit is not installed in the test environment, so we stub it out
 before importing anything from src.reporting.dashboard.
 The tests cover:
-  - _color_crowding / _color_composite helper functions
-  - Portfolio-tab merge logic (Tab 1)
-  - Universe-scanner filter + sort logic (Tab 3)
-  - Exit-monitor status thresholds and alert counts (Tab 4)
+  - _color_crowding / _color_composite styling helpers
+  - _fmt_sizing helper (Tab 2)
+  - status_label (Tab 4, now module-level)
+  - build_portfolio_display (Tab 1 pure data function)
+  - build_scanner_display (Tab 3 pure data function)
+  - build_exit_monitor_display (Tab 4 pure data function)
 """
 import sys
 import types
@@ -34,16 +36,25 @@ def _make_streamlit_stub():
 
 sys.modules.setdefault("streamlit", _make_streamlit_stub())
 
-from src.reporting.dashboard import _color_crowding, _color_composite  # noqa: E402
+from src.reporting.dashboard import (  # noqa: E402
+    _color_crowding,
+    _color_composite,
+    _fmt_sizing,
+    status_label,
+    build_portfolio_display,
+    build_scanner_display,
+    build_exit_monitor_display,
+    _CROWD_EXIT,
+    _WATCH_THR,
+)
 
 
 # ---------------------------------------------------------------------------
-# Helpers shared across test sections
+# Helpers
 # ---------------------------------------------------------------------------
 
 def _make_scores(*tickers, composite=0.60, quality=0.50, crowding=0.30,
                  physical=0.70, entry=True) -> pd.DataFrame:
-    """Build a minimal signal_scores-like DataFrame."""
     return pd.DataFrame([
         {
             "ticker":              t,
@@ -94,7 +105,7 @@ def _make_universe() -> pd.DataFrame:
 
 
 # ===========================================================================
-# 1. Color helper functions
+# 1. Color styling helpers
 # ===========================================================================
 
 class TestColorCrowding:
@@ -116,6 +127,7 @@ class TestColorCrowding:
     def test_below_watch_threshold_is_green(self, val):
         assert "ccffcc" in _color_crowding(val)
 
+
 class TestColorComposite:
     """_color_composite: green ≥ 0.65, light-blue ≥ 0.55, empty otherwise."""
 
@@ -135,114 +147,13 @@ class TestColorComposite:
     def test_below_threshold_is_empty(self, val):
         assert _color_composite(val) == ""
 
-# ===========================================================================
-# 2. Portfolio-tab merge logic (Tab 1)
-# ===========================================================================
-
-class TestPortfolioTabMerge:
-    """Replicate Tab 1: portfolio ← left-join ← scores (or fallback copy)."""
-
-    _SCORE_COLS = ["ticker", "composite_score", "quality_score",
-                   "crowding_score", "physical_norm"]
-
-    def test_merge_adds_signal_columns(self):
-        portfolio = _make_portfolio("ETN", "RHM.DE")
-        scores    = _make_scores("ETN", "RHM.DE", composite=0.72, crowding=0.25)
-        merged = portfolio.merge(scores[self._SCORE_COLS], on="ticker", how="left")
-        assert "crowding_score" in merged.columns
-        assert "quality_score"  in merged.columns
-        assert len(merged) == 2
-
-    def test_merge_keeps_portfolio_rows_when_score_missing(self):
-        portfolio = _make_portfolio("ETN", "UNKNOWN")
-        scores    = _make_scores("ETN")
-        merged = portfolio.merge(scores[self._SCORE_COLS], on="ticker", how="left")
-        assert len(merged) == 2
-        assert pd.isna(merged.loc[merged["ticker"] == "UNKNOWN", "crowding_score"].iloc[0])
-
-    def test_scores_empty_falls_back_to_portfolio_copy(self):
-        """Tab 1 code: if scores.empty: merged = portfolio.copy()"""
-        portfolio = _make_portfolio("ETN")
-        # Replicate the else-branch directly
-        merged = portfolio.copy()
-        assert list(merged["ticker"]) == ["ETN"]
-        assert "crowding_score" not in merged.columns
-
-    def test_sort_by_composite_desc(self):
-        # Drop composite_score from portfolio to avoid merge suffix collision;
-        # the scores slice provides the authoritative composite_score column.
-        portfolio = _make_portfolio("A", "B", "C").drop(columns=["composite_score"])
-        scores_df = pd.DataFrame([
-            {"ticker": "A", "composite_score": 0.80, "quality_score": 0.5,
-             "crowding_score": 0.2, "physical_norm": 0.7},
-            {"ticker": "B", "composite_score": 0.55, "quality_score": 0.4,
-             "crowding_score": 0.3, "physical_norm": 0.6},
-            {"ticker": "C", "composite_score": 0.68, "quality_score": 0.6,
-             "crowding_score": 0.1, "physical_norm": 0.8},
-        ])
-        merged    = portfolio.merge(scores_df, on="ticker", how="left")
-        assert "composite_score" in merged.columns  # no suffix collision
-        sorted_df = merged.sort_values("composite_score", ascending=False)
-        assert sorted_df["ticker"].tolist() == ["A", "C", "B"]
-
-    def test_display_columns_filtered_to_present_only(self):
-        """Tab 1 filters display_cols to those actually in merged."""
-        portfolio  = _make_portfolio("ETN").drop(columns=["composite_score"])
-        scores_df  = pd.DataFrame([{
-            "ticker": "ETN", "composite_score": 0.70,
-            "quality_score": 0.55, "crowding_score": 0.30, "physical_norm": 0.65,
-        }])
-        merged      = portfolio.merge(scores_df, on="ticker", how="left")
-        desired     = ["ticker", "weight", "composite_score", "quality_score", "crowding_score"]
-        display_col = [c for c in desired if c in merged.columns]
-        assert set(display_col) == set(desired)
-
-    def test_weight_formatted_as_percentage(self):
-        portfolio = _make_portfolio("ETN")
-        portfolio["weight"] = 0.075
-        portfolio["weight"] = portfolio["weight"].map(lambda x: f"{x:.1%}")
-        assert portfolio["weight"].iloc[0] == "7.5%"
-
-    def test_bucket_col_prefers_primary_bucket(self):
-        """Tab 1 uses 'primary_bucket' if present, else falls back to 'bucket_id'."""
-        port_with_primary = _make_portfolio("ETN")
-        port_with_primary["primary_bucket"] = "grid"
-        bucket_col = ("primary_bucket" if "primary_bucket" in port_with_primary.columns
-                      else "bucket_id")
-        assert bucket_col == "primary_bucket"
-
-    def test_bucket_col_falls_back_to_bucket_id(self):
-        portfolio  = _make_portfolio("ETN")   # has bucket_id, not primary_bucket
-        bucket_col = ("primary_bucket" if "primary_bucket" in portfolio.columns
-                      else "bucket_id")
-        assert bucket_col == "bucket_id"
-
-    def test_bucket_aggregation(self):
-        portfolio = pd.DataFrame([
-            {"ticker": "ETN",  "weight": 0.10, "bucket_id": "grid"},
-            {"ticker": "NVDA", "weight": 0.08, "bucket_id": "ai_infra"},
-            {"ticker": "CCJ",  "weight": 0.06, "bucket_id": "grid"},
-        ])
-        bucket_agg = portfolio.groupby("bucket_id")["weight"].sum()
-        assert pytest.approx(bucket_agg["grid"],     abs=1e-6) == 0.16
-        assert pytest.approx(bucket_agg["ai_infra"], abs=1e-6) == 0.08
-
 
 # ===========================================================================
-# 3. Signal Deep Dive formatting logic (Tab 2)
+# 2. _fmt_sizing (Tab 2 sizing table)
 # ===========================================================================
 
-class TestTab2SizingFormat:
-    """
-    Tab 2 renders mu/sigma/kelly as:
-        f"{val:.1%}" if val else "—"
-    This means val=0.0 (falsy float) renders as "—", not "0.0%".
-    These tests document that contract.
-    """
-
-    def _fmt(self, val):
-        """Mirror the Tab 2 sizing format in run_dashboard()."""
-        return f"{val:.1%}" if val else "—"
+class TestFmtSizing:
+    """_fmt_sizing: formats as percentage; "—" for None/NaN; 0.0 is valid."""
 
     @pytest.mark.parametrize("val,expected", [
         (0.12,  "12.0%"),
@@ -250,186 +161,281 @@ class TestTab2SizingFormat:
         (0.003, "0.3%"),
     ])
     def test_positive_value_formats_as_pct(self, val, expected):
-        assert self._fmt(val) == expected
+        assert _fmt_sizing(val) == expected
 
-    @pytest.mark.parametrize("val", [None, 0.0])
-    def test_falsy_value_shows_dash(self, val):
-        # 0.0 is falsy in Python — same branch as None in Tab 2's ternary
-        assert self._fmt(val) == "—"
+    def test_zero_formats_as_zero_pct(self):
+        # 0.0 is a valid value — must NOT render as "—"
+        assert _fmt_sizing(0.0) == "0.0%"
 
-    def test_row_lookup_missing_key_shows_dash(self):
-        """row.get("missing_key") returns None → "—"."""
-        row = _make_scores("ETN").iloc[0]
-        result = f"{row.get('nonexistent', 0):.1%}" if row.get("nonexistent") else "—"
-        assert result == "—"
+    @pytest.mark.parametrize("val", [None, float("nan")])
+    def test_missing_returns_dash(self, val):
+        assert _fmt_sizing(val) == "—"
 
 
 # ===========================================================================
-# 5. Universe-scanner filter + sort logic (Tab 3)
+# 3. status_label (Tab 4, now module-level)
 # ===========================================================================
 
-class TestUniverseScannerFilter:
-    """Replicate Tab 3 merge → filter → sort pipeline."""
-
-    def _build_scanner_df(self):
-        scores   = _make_scores("ETN", "RHM.DE", "CCJ", "AWK", "NVDA")
-        universe = _make_universe()
-        return scores.merge(
-            universe[["ticker", "region", "primary_bucket"]],
-            on="ticker", how="left",
-        )
-
-    def test_region_filter_us_only(self):
-        filtered = self._build_scanner_df()
-        filtered = filtered[filtered["region"].isin(["US"])]
-        assert set(filtered["ticker"]) == {"ETN", "CCJ", "AWK", "NVDA"}
-
-    def test_region_filter_eu_only(self):
-        filtered = self._build_scanner_df()[lambda df: df["region"].isin(["EU"])]
-        assert set(filtered["ticker"]) == {"RHM.DE"}
-
-    def test_bucket_filter_grid_only(self):
-        filtered = self._build_scanner_df()[lambda df: df["primary_bucket"].isin(["grid"])]
-        assert set(filtered["ticker"]) == {"ETN"}
-
-    def test_combined_region_and_bucket_filter(self):
-        df = self._build_scanner_df()
-        filtered = df[df["region"].isin(["US"]) & df["primary_bucket"].isin(["nuclear", "water"])]
-        assert set(filtered["ticker"]) == {"CCJ", "AWK"}
-
-    def test_no_filter_returns_all(self):
-        df         = self._build_scanner_df()
-        all_regions = ["EU", "US", "CA"]
-        all_buckets = ["grid", "nuclear", "defense", "water", "critical_materials", "ai_infra"]
-        filtered   = df[df["region"].isin(all_regions) & df["primary_bucket"].isin(all_buckets)]
-        assert len(filtered) == 5
-
-    def test_sort_by_composite_descending(self):
-        scores = pd.DataFrame([
-            {"ticker": "ETN",  "composite_score": 0.80, "region": "US", "primary_bucket": "grid"},
-            {"ticker": "NVDA", "composite_score": 0.62, "region": "US", "primary_bucket": "ai_infra"},
-            {"ticker": "CCJ",  "composite_score": 0.71, "region": "US", "primary_bucket": "nuclear"},
-        ])
-        sorted_df = scores.sort_values("composite_score", ascending=False)
-        assert sorted_df["ticker"].tolist() == ["ETN", "CCJ", "NVDA"]
-
-    def test_display_columns_all_present_after_merge(self):
-        merged  = self._build_scanner_df()
-        desired = ["ticker", "region", "primary_bucket",
-                   "composite_score", "physical_norm",
-                   "quality_score", "crowding_score", "entry_signal"]
-        present = [c for c in desired if c in merged.columns]
-        assert set(present) == set(desired)
-
-    def test_ticker_missing_from_universe_has_nan_bucket(self):
-        scores  = _make_scores("GHOST_TICKER")
-        merged  = scores.merge(_make_universe()[["ticker", "region", "primary_bucket"]],
-                               on="ticker", how="left")
-        assert pd.isna(merged["primary_bucket"].iloc[0])
-
-
-# ===========================================================================
-# 6. Exit-monitor threshold / status logic (Tab 4)
-# ===========================================================================
-
-class TestExitMonitorLogic:
-    """Replicate the status_label and alert-count logic from Tab 4."""
-
-    CROWD_EXIT = 0.75   # matches dashboard hard-coded value
-    WATCH_THR  = 0.55   # matches dashboard hard-coded value
-
-    def _status(self, crowd):
-        """Mirror the status_label closure in run_dashboard()."""
-        if pd.isna(crowd):
-            return "⚪ No data"
-        if crowd >= self.CROWD_EXIT:
-            return "🔴 EXIT"
-        if crowd >= self.WATCH_THR:
-            return "🟡 WATCH"
-        return "🟢 OK"
-
-    # --- status_label parametrized ---
+class TestStatusLabel:
+    """status_label uses module constants by default; accepts override."""
 
     @pytest.mark.parametrize("crowd,expected", [
-        (0.75, "🔴 EXIT"),
-        (0.90, "🔴 EXIT"),
-        (1.00, "🔴 EXIT"),
-        (0.55, "🟡 WATCH"),
-        (0.74, "🟡 WATCH"),
-        (0.00, "🟢 OK"),
-        (0.30, "🟢 OK"),
-        (0.54, "🟢 OK"),
+        (_CROWD_EXIT,        "🔴 EXIT"),
+        (_CROWD_EXIT + 0.10, "🔴 EXIT"),
+        (1.00,               "🔴 EXIT"),
+        (_WATCH_THR,         "🟡 WATCH"),
+        (_CROWD_EXIT - 0.01, "🟡 WATCH"),
+        (0.00,               "🟢 OK"),
+        (0.30,               "🟢 OK"),
+        (_WATCH_THR - 0.01,  "🟢 OK"),
     ])
-    def test_status_label(self, crowd, expected):
-        assert self._status(crowd) == expected
+    def test_default_thresholds(self, crowd, expected):
+        assert status_label(crowd) == expected
 
-    def test_nan_crowding_returns_no_data(self):
-        assert self._status(float("nan")) == "⚪ No data"
+    def test_nan_returns_no_data(self):
+        assert status_label(float("nan")) == "⚪ No data"
 
-    # --- alert counts ---
+    def test_custom_thresholds(self):
+        assert status_label(0.65, crowd_exit=0.60, watch_thr=0.40) == "🔴 EXIT"
+        assert status_label(0.45, crowd_exit=0.60, watch_thr=0.40) == "🟡 WATCH"
+        assert status_label(0.35, crowd_exit=0.60, watch_thr=0.40) == "🟢 OK"
 
-    def test_red_count_correct(self):
-        scores = _make_scores("A", "B", "C", "D")
-        scores.loc[scores["ticker"].isin(["A", "B"]), "crowding_score"] = 0.80
-        scores.loc[scores["ticker"].isin(["C"]),      "crowding_score"] = 0.60
-        scores.loc[scores["ticker"].isin(["D"]),      "crowding_score"] = 0.20
-        assert (scores["crowding_score"] >= self.CROWD_EXIT).sum() == 2
 
-    def test_yellow_count_correct(self):
-        scores = _make_scores("A", "B", "C", "D")
-        scores.loc[scores["ticker"].isin(["A"]),      "crowding_score"] = 0.80
-        scores.loc[scores["ticker"].isin(["B", "C"]), "crowding_score"] = 0.60
-        scores.loc[scores["ticker"].isin(["D"]),      "crowding_score"] = 0.20
-        n_yel = (
-            (scores["crowding_score"] >= self.WATCH_THR) &
-            (scores["crowding_score"] <  self.CROWD_EXIT)
-        ).sum()
-        assert n_yel == 2
+# ===========================================================================
+# 4. build_portfolio_display (Tab 1)
+# ===========================================================================
 
-    def test_no_alerts_when_all_ok(self):
-        scores = _make_scores("A", "B", "C", crowding=0.30)
-        assert (scores["crowding_score"] >= self.CROWD_EXIT).sum() == 0
-        assert (
-            (scores["crowding_score"] >= self.WATCH_THR) &
-            (scores["crowding_score"] <  self.CROWD_EXIT)
-        ).sum() == 0
+class TestBuildPortfolioDisplay:
+    """build_portfolio_display merges scores into portfolio with no column collision."""
 
-    def test_portfolio_filter_to_held_tickers(self):
-        portfolio = _make_portfolio("ETN", "NVDA")
-        scores    = _make_scores("ETN", "NVDA", "CCJ", "AWK")
-        port_scores = scores[scores["ticker"].isin(portfolio["ticker"].tolist())]
-        assert set(port_scores["ticker"]) == {"ETN", "NVDA"}
-        assert len(port_scores) == 2
+    def test_signal_columns_present_after_merge(self):
+        df = build_portfolio_display(_make_portfolio("ETN"), _make_scores("ETN"))
+        assert "crowding_score" in df.columns
+        assert "quality_score"  in df.columns
 
-    def test_status_column_applied_to_each_row(self):
-        scores = _make_scores("A", "B", "C")
-        scores.loc[scores["ticker"] == "A", "crowding_score"] = 0.80
-        scores.loc[scores["ticker"] == "B", "crowding_score"] = 0.60
-        scores.loc[scores["ticker"] == "C", "crowding_score"] = 0.20
-        scores["status"] = scores["crowding_score"].apply(self._status)
-        assert scores.loc[scores["ticker"] == "A", "status"].iloc[0] == "🔴 EXIT"
-        assert scores.loc[scores["ticker"] == "B", "status"].iloc[0] == "🟡 WATCH"
-        assert scores.loc[scores["ticker"] == "C", "status"].iloc[0] == "🟢 OK"
+    def test_no_composite_score_suffix_collision(self):
+        # portfolio has composite_score; scores also has it — must produce single column
+        df = build_portfolio_display(_make_portfolio("ETN"), _make_scores("ETN"))
+        assert "composite_score"   in df.columns
+        assert "composite_score_x" not in df.columns
+        assert "composite_score_y" not in df.columns
 
-    def test_exit_monitor_display_columns(self):
-        """Tab 4 restricts display to exactly these 5 columns."""
-        scores = _make_scores("ETN", "NVDA")
-        scores["status"] = scores["crowding_score"].apply(self._status)
-        expected = ["ticker", "crowding_score", "quality_score", "composite_score", "status"]
-        display  = scores[expected]
-        assert list(display.columns) == expected
+    def test_sorted_by_composite_desc(self):
+        scores = pd.DataFrame([
+            {"ticker": "A", "composite_score": 0.80, "quality_score": 0.5,
+             "crowding_score": 0.2, "physical_norm": 0.7},
+            {"ticker": "B", "composite_score": 0.55, "quality_score": 0.4,
+             "crowding_score": 0.3, "physical_norm": 0.6},
+            {"ticker": "C", "composite_score": 0.68, "quality_score": 0.6,
+             "crowding_score": 0.1, "physical_norm": 0.8},
+        ])
+        df = build_portfolio_display(_make_portfolio("A", "B", "C"), scores)
+        assert df["ticker"].tolist() == ["A", "C", "B"]
 
-    def test_sort_by_crowding_descending(self):
+    def test_index_reset_after_sort(self):
+        df = build_portfolio_display(
+            _make_portfolio("A", "B"),
+            _make_scores("A", "B"),
+        )
+        assert df.index.tolist() == list(range(len(df)))
+
+    def test_weight_formatted_as_percentage(self):
+        df = build_portfolio_display(_make_portfolio("ETN", weight=0.075), _make_scores("ETN"))
+        assert df.loc[df["ticker"] == "ETN", "weight"].iloc[0] == "7.5%"
+
+    def test_scores_empty_returns_portfolio_columns_only(self):
+        df = build_portfolio_display(_make_portfolio("ETN"), pd.DataFrame())
+        assert "ticker" in df.columns
+        assert "crowding_score" not in df.columns
+
+    def test_missing_ticker_in_scores_gets_nan_signals(self):
+        df = build_portfolio_display(
+            _make_portfolio("ETN", "UNKNOWN"),
+            _make_scores("ETN"),
+        )
+        assert pd.isna(df.loc[df["ticker"] == "UNKNOWN", "crowding_score"].iloc[0])
+
+    def test_bucket_aggregation(self):
+        portfolio = pd.DataFrame([
+            {"ticker": "ETN",  "weight": 0.10, "bucket_id": "grid",
+             "composite_score": 0.65, "kelly_25pct": 0.06,
+             "snapshot_date": date(2025, 3, 1), "is_new_position": True, "rationale": ""},
+            {"ticker": "NVDA", "weight": 0.08, "bucket_id": "ai_infra",
+             "composite_score": 0.70, "kelly_25pct": 0.07,
+             "snapshot_date": date(2025, 3, 1), "is_new_position": True, "rationale": ""},
+            {"ticker": "CCJ",  "weight": 0.06, "bucket_id": "grid",
+             "composite_score": 0.60, "kelly_25pct": 0.05,
+             "snapshot_date": date(2025, 3, 1), "is_new_position": False, "rationale": ""},
+        ])
+        agg = portfolio.groupby("bucket_id")["weight"].sum()
+        assert pytest.approx(agg["grid"],     abs=1e-6) == 0.16
+        assert pytest.approx(agg["ai_infra"], abs=1e-6) == 0.08
+
+
+# ===========================================================================
+# 5. build_scanner_display (Tab 3)
+# ===========================================================================
+
+class TestBuildScannerDisplay:
+    """build_scanner_display merges scores with universe and sorts by composite."""
+
+    def _df(self):
+        return build_scanner_display(
+            _make_scores("ETN", "RHM.DE", "CCJ", "AWK", "NVDA"),
+            _make_universe(),
+        )
+
+    def test_expected_columns_present(self):
+        df = self._df()
+        for col in ["ticker", "region", "primary_bucket", "composite_score",
+                    "physical_norm", "quality_score", "crowding_score", "entry_signal"]:
+            assert col in df.columns
+
+    def test_sorted_by_composite_descending(self):
+        scores = pd.DataFrame([
+            {"ticker": "ETN",  "composite_score": 0.80, "quality_score": 0.5,
+             "crowding_score": 0.2, "physical_norm": 0.7, "entry_signal": True,
+             "score_date": date(2025, 3, 1), "roic_wacc_spread": 0.08,
+             "margin_snr": 4.5, "inflation_convexity": 0.03, "etf_correlation": 0.25,
+             "trends_norm": 0.40, "short_pct": 0.05, "mu_estimate": 0.12,
+             "sigma_estimate": 0.20, "kelly_25pct": 0.06},
+            {"ticker": "CCJ",  "composite_score": 0.71, "quality_score": 0.6,
+             "crowding_score": 0.1, "physical_norm": 0.8, "entry_signal": True,
+             "score_date": date(2025, 3, 1), "roic_wacc_spread": 0.05,
+             "margin_snr": 3.0, "inflation_convexity": 0.02, "etf_correlation": 0.15,
+             "trends_norm": 0.35, "short_pct": 0.03, "mu_estimate": 0.10,
+             "sigma_estimate": 0.18, "kelly_25pct": 0.05},
+        ])
+        universe = pd.DataFrame([
+            {"ticker": "ETN", "region": "US", "primary_bucket": "grid"},
+            {"ticker": "CCJ", "region": "US", "primary_bucket": "nuclear"},
+        ])
+        df = build_scanner_display(scores, universe)
+        assert df["ticker"].tolist() == ["ETN", "CCJ"]
+
+    def test_index_reset(self):
+        df = self._df()
+        assert df.index.tolist() == list(range(len(df)))
+
+    def test_region_filter_us(self):
+        df      = self._df()
+        result  = df[df["region"].isin(["US"])]
+        assert set(result["ticker"]) == {"ETN", "CCJ", "AWK", "NVDA"}
+
+    def test_region_filter_eu(self):
+        df     = self._df()
+        result = df[df["region"].isin(["EU"])]
+        assert set(result["ticker"]) == {"RHM.DE"}
+
+    def test_bucket_filter(self):
+        df     = self._df()
+        result = df[df["primary_bucket"].isin(["nuclear", "water"])]
+        assert set(result["ticker"]) == {"CCJ", "AWK"}
+
+    def test_combined_filter(self):
+        df     = self._df()
+        result = df[df["region"].isin(["US"]) & df["primary_bucket"].isin(["grid"])]
+        assert set(result["ticker"]) == {"ETN"}
+
+    def test_unknown_ticker_has_nan_bucket(self):
+        df = build_scanner_display(_make_scores("GHOST"), _make_universe())
+        assert pd.isna(df.loc[df["ticker"] == "GHOST", "primary_bucket"].iloc[0])
+
+
+# ===========================================================================
+# 6. build_exit_monitor_display (Tab 4)
+# ===========================================================================
+
+class TestBuildExitMonitorDisplay:
+    """build_exit_monitor_display produces status column and correct alert counts."""
+
+    def test_returns_tuple_of_three(self):
+        result = build_exit_monitor_display(_make_portfolio("ETN"), _make_scores("ETN"))
+        assert len(result) == 3
+
+    def test_status_column_present(self):
+        df, _, _ = build_exit_monitor_display(_make_portfolio("ETN"), _make_scores("ETN"))
+        assert "status" in df.columns
+
+    def test_display_columns_exact(self):
+        df, _, _ = build_exit_monitor_display(_make_portfolio("ETN"), _make_scores("ETN"))
+        assert list(df.columns) == [
+            "ticker", "crowding_score", "quality_score", "composite_score", "status"
+        ]
+
+    def test_sorted_by_crowding_desc(self):
         scores = _make_scores("A", "B", "C")
         scores.loc[scores["ticker"] == "A", "crowding_score"] = 0.20
         scores.loc[scores["ticker"] == "B", "crowding_score"] = 0.80
         scores.loc[scores["ticker"] == "C", "crowding_score"] = 0.55
-        sorted_df = scores.sort_values("crowding_score", ascending=False)
-        assert sorted_df["ticker"].tolist() == ["B", "C", "A"]
+        df, _, _ = build_exit_monitor_display(_make_portfolio("A", "B", "C"), scores)
+        assert df["ticker"].tolist() == ["B", "C", "A"]
 
-    def test_empty_portfolio_produces_no_alerts(self):
-        portfolio   = pd.DataFrame()
-        scores      = _make_scores("ETN", "NVDA")
-        port_tickers = [] if portfolio.empty else portfolio["ticker"].tolist()
-        port_scores  = scores[scores["ticker"].isin(port_tickers)]
-        assert port_scores.empty
+    def test_index_reset(self):
+        df, _, _ = build_exit_monitor_display(_make_portfolio("ETN"), _make_scores("ETN"))
+        assert df.index.tolist() == list(range(len(df)))
+
+    def test_red_count(self):
+        scores = _make_scores("A", "B", "C", "D")
+        scores.loc[scores["ticker"].isin(["A", "B"]), "crowding_score"] = 0.80
+        scores.loc[scores["ticker"].isin(["C"]),      "crowding_score"] = 0.60
+        scores.loc[scores["ticker"].isin(["D"]),      "crowding_score"] = 0.20
+        _, n_red, _ = build_exit_monitor_display(_make_portfolio("A", "B", "C", "D"), scores)
+        assert n_red == 2
+
+    def test_yellow_count(self):
+        scores = _make_scores("A", "B", "C", "D")
+        scores.loc[scores["ticker"].isin(["A"]),      "crowding_score"] = 0.80
+        scores.loc[scores["ticker"].isin(["B", "C"]), "crowding_score"] = 0.60
+        scores.loc[scores["ticker"].isin(["D"]),      "crowding_score"] = 0.20
+        _, _, n_yel = build_exit_monitor_display(_make_portfolio("A", "B", "C", "D"), scores)
+        assert n_yel == 2
+
+    def test_no_alerts_when_all_ok(self):
+        _, n_red, n_yel = build_exit_monitor_display(
+            _make_portfolio("A", "B"),
+            _make_scores("A", "B", crowding=0.30),
+        )
+        assert n_red == 0
+        assert n_yel == 0
+
+    def test_filters_to_held_tickers_only(self):
+        portfolio = _make_portfolio("ETN", "NVDA")
+        scores    = _make_scores("ETN", "NVDA", "CCJ", "AWK")
+        df, _, _  = build_exit_monitor_display(portfolio, scores)
+        assert set(df["ticker"]) == {"ETN", "NVDA"}
+
+    def test_empty_portfolio_returns_empty(self):
+        df, n_red, n_yel = build_exit_monitor_display(pd.DataFrame(), _make_scores("ETN"))
+        assert df.empty
+        assert n_red == 0
+        assert n_yel == 0
+
+    def test_empty_scores_returns_empty(self):
+        df, n_red, n_yel = build_exit_monitor_display(_make_portfolio("ETN"), pd.DataFrame())
+        assert df.empty
+        assert n_red == 0
+        assert n_yel == 0
+
+    def test_ticker_held_but_not_in_scores_returns_empty(self):
+        df, n_red, n_yel = build_exit_monitor_display(
+            _make_portfolio("ORPHAN"),
+            _make_scores("ETN"),  # ORPHAN not scored
+        )
+        assert df.empty
+        assert n_red == 0
+        assert n_yel == 0
+
+    def test_custom_thresholds_respected(self):
+        scores = _make_scores("A")
+        scores.loc[scores["ticker"] == "A", "crowding_score"] = 0.65
+        # With default thresholds (0.75/0.55): yellow
+        _, n_red_def, n_yel_def = build_exit_monitor_display(
+            _make_portfolio("A"), scores
+        )
+        assert n_red_def == 0 and n_yel_def == 1
+        # With tighter exit threshold (0.60): red
+        _, n_red_tight, _ = build_exit_monitor_display(
+            _make_portfolio("A"), scores, crowd_exit=0.60, watch_thr=0.40
+        )
+        assert n_red_tight == 1

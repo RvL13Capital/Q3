@@ -21,6 +21,14 @@ from src.data.universe import load_universe
 
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "q3.duckdb"
 
+# Single source of truth for exit/watch thresholds used by Tab 4
+# (matches params["signals"]["crowding_exit_threshold"] and
+#  params["reporting"]["watch_crowding_threshold"])
+_CROWD_EXIT = 0.75
+_WATCH_THR  = 0.55
+
+_SCORE_COLS = ["ticker", "composite_score", "quality_score", "crowding_score", "physical_norm"]
+
 
 @st.cache_resource
 def get_conn():
@@ -35,6 +43,10 @@ def load_data():
     universe  = load_universe()
     return portfolio, scores, universe
 
+
+# ---------------------------------------------------------------------------
+# Styling helpers
+# ---------------------------------------------------------------------------
 
 def _color_crowding(val):
     if pd.isna(val):
@@ -55,6 +67,107 @@ def _color_composite(val):
         return "background-color: #e6f7ff"
     return ""
 
+
+# ---------------------------------------------------------------------------
+# Pure data-transformation helpers (testable without Streamlit)
+# ---------------------------------------------------------------------------
+
+def status_label(crowd, crowd_exit: float = _CROWD_EXIT, watch_thr: float = _WATCH_THR) -> str:
+    """Return an emoji status string for a crowding score."""
+    if pd.isna(crowd):
+        return "⚪ No data"
+    if crowd >= crowd_exit:
+        return "🔴 EXIT"
+    if crowd >= watch_thr:
+        return "🟡 WATCH"
+    return "🟢 OK"
+
+
+def _fmt_sizing(val) -> str:
+    """Format a sizing metric (mu/sigma/kelly) as percentage, or '—' if missing."""
+    return f"{val:.1%}" if pd.notna(val) else "—"
+
+
+def build_portfolio_display(portfolio: pd.DataFrame, scores: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merge live signal scores into the portfolio table.
+
+    portfolio.composite_score is the stale value saved at construction time;
+    scores has the current value. Drop the stale column before merging so the
+    result has a single unambiguous composite_score column (no _x/_y suffixes).
+    """
+    if scores.empty:
+        merged = portfolio.copy()
+    else:
+        port = portfolio.drop(columns=["composite_score"], errors="ignore")
+        merged = port.merge(scores[_SCORE_COLS], on="ticker", how="left")
+
+    display_cols = ["ticker", "weight", "composite_score", "quality_score", "crowding_score"]
+    display_cols = [c for c in display_cols if c in merged.columns]
+    display_df = merged[display_cols].copy()
+    display_df["weight"] = display_df["weight"].map(lambda x: f"{x:.1%}")
+
+    if "composite_score" in display_df.columns:
+        display_df = display_df.sort_values("composite_score", ascending=False)
+
+    return display_df.reset_index(drop=True)
+
+
+def build_scanner_display(scores: pd.DataFrame, universe: pd.DataFrame) -> pd.DataFrame:
+    """Merge scores with universe metadata for the Universe Scanner tab."""
+    merged = scores.merge(
+        universe[["ticker", "region", "primary_bucket"]],
+        on="ticker", how="left",
+    )
+    if "composite_score" in merged.columns:
+        merged = merged.sort_values("composite_score", ascending=False)
+
+    display_cols = ["ticker", "region", "primary_bucket",
+                    "composite_score", "physical_norm",
+                    "quality_score", "crowding_score", "entry_signal"]
+    display_cols = [c for c in display_cols if c in merged.columns]
+    return merged[display_cols].reset_index(drop=True)
+
+
+def build_exit_monitor_display(
+    portfolio: pd.DataFrame,
+    scores: pd.DataFrame,
+    crowd_exit: float = _CROWD_EXIT,
+    watch_thr: float  = _WATCH_THR,
+) -> tuple[pd.DataFrame, int, int]:
+    """
+    Build the Exit Monitor display table.
+
+    Returns (display_df, n_red, n_yellow) where n_red/n_yellow are alert counts.
+    Returns an empty DataFrame and zero counts when portfolio or scores is empty.
+    """
+    if portfolio.empty or scores.empty:
+        return pd.DataFrame(), 0, 0
+
+    port_tickers = portfolio["ticker"].tolist()
+    port_scores  = scores[scores["ticker"].isin(port_tickers)].copy()
+
+    if port_scores.empty:
+        return pd.DataFrame(), 0, 0
+
+    port_scores["status"] = port_scores["crowding_score"].apply(
+        lambda c: status_label(c, crowd_exit, watch_thr)
+    )
+    display = port_scores[
+        ["ticker", "crowding_score", "quality_score", "composite_score", "status"]
+    ].copy().sort_values("crowding_score", ascending=False).reset_index(drop=True)
+
+    n_red = int((port_scores["crowding_score"] >= crowd_exit).sum())
+    n_yel = int(
+        ((port_scores["crowding_score"] >= watch_thr) &
+         (port_scores["crowding_score"] <  crowd_exit)).sum()
+    )
+    return display, n_red, n_yel
+
+
+# ---------------------------------------------------------------------------
+# Streamlit layout
+# ---------------------------------------------------------------------------
 
 def run_dashboard():
     st.set_page_config(
@@ -86,32 +199,16 @@ def run_dashboard():
             col2.metric("Invested", f"{invested:.1%}")
             col3.metric("Cash", f"{cash:.1%}")
 
-            # Merge signal scores
-            if not scores.empty:
-                merged = portfolio.merge(
-                    scores[["ticker", "composite_score", "quality_score",
-                            "crowding_score", "physical_norm"]],
-                    on="ticker", how="left"
-                )
-            else:
-                merged = portfolio.copy()
-
-            display_cols = ["ticker", "weight", "composite_score",
-                            "quality_score", "crowding_score"]
-            display_cols = [c for c in display_cols if c in merged.columns]
-            display_df = merged[display_cols].copy()
-            display_df["weight"] = display_df["weight"].map(lambda x: f"{x:.1%}")
-
             st.dataframe(
-                display_df.sort_values("composite_score", ascending=False)
-                if "composite_score" in display_df.columns
-                else display_df,
+                build_portfolio_display(portfolio, scores),
                 use_container_width=True,
             )
 
-            # Bucket allocation pie
-            if "primary_bucket" in portfolio.columns or "bucket_id" in portfolio.columns:
-                bucket_col = "primary_bucket" if "primary_bucket" in portfolio.columns else "bucket_id"
+            # Bucket allocation chart
+            bucket_col = ("primary_bucket" if "primary_bucket" in portfolio.columns
+                          else "bucket_id" if "bucket_id" in portfolio.columns
+                          else None)
+            if bucket_col:
                 bucket_agg = portfolio.groupby(bucket_col)["weight"].sum().reset_index()
                 st.subheader("Allocation by Megatrend Bucket")
                 try:
@@ -145,37 +242,34 @@ def run_dashboard():
                 col4.metric("Crowding",  f"{row.get('crowding_score', 0):.3f}")
 
                 st.subheader("Quality Breakdown")
-                q_data = {
+                st.table(pd.DataFrame({
                     "Sub-score": ["ROIC−WACC Spread", "Margin SNR", "Inflation Convexity"],
                     "Value": [
                         row.get("roic_wacc_spread"),
                         row.get("margin_snr"),
                         row.get("inflation_convexity"),
                     ],
-                }
-                st.table(pd.DataFrame(q_data))
+                }))
 
                 st.subheader("Crowding Breakdown")
-                c_data = {
+                st.table(pd.DataFrame({
                     "Component": ["ETF Correlation (60d)", "Trends (normalized)", "Short Interest"],
                     "Score": [
                         row.get("etf_correlation"),
                         row.get("trends_norm"),
                         row.get("short_pct"),
                     ],
-                }
-                st.table(pd.DataFrame(c_data))
+                }))
 
                 st.subheader("Sizing")
-                s_data = {
+                st.table(pd.DataFrame({
                     "Metric": ["μ estimate", "σ estimate", "Kelly 25%"],
                     "Value": [
-                        f"{row.get('mu_estimate', 0):.1%}" if row.get("mu_estimate") else "—",
-                        f"{row.get('sigma_estimate', 0):.1%}" if row.get("sigma_estimate") else "—",
-                        f"{row.get('kelly_25pct', 0):.1%}" if row.get("kelly_25pct") else "—",
+                        _fmt_sizing(row.get("mu_estimate")),
+                        _fmt_sizing(row.get("sigma_estimate")),
+                        _fmt_sizing(row.get("kelly_25pct")),
                     ],
-                }
-                st.table(pd.DataFrame(s_data))
+                }))
 
     # ────────────────────────────────────────────────────────────────────────
     # TAB 3: Universe Scanner
@@ -184,12 +278,6 @@ def run_dashboard():
         if scores.empty:
             st.info("No signal scores yet.")
         else:
-            # Merge with universe for region/bucket filter
-            merged = scores.merge(
-                universe[["ticker", "region", "primary_bucket"]],
-                on="ticker", how="left"
-            )
-
             col1, col2 = st.columns(2)
             with col1:
                 region_filter = st.multiselect(
@@ -203,64 +291,33 @@ def run_dashboard():
                     default=["grid", "nuclear", "defense", "water", "critical_materials", "ai_infra"]
                 )
 
-            filtered = merged[
-                merged["region"].isin(region_filter)
-                & merged["primary_bucket"].isin(bucket_filter)
-            ].copy()
-
-            if "composite_score" in filtered.columns:
-                filtered = filtered.sort_values("composite_score", ascending=False)
-
-            display_cols = ["ticker", "region", "primary_bucket",
-                            "composite_score", "physical_norm",
-                            "quality_score", "crowding_score", "entry_signal"]
-            display_cols = [c for c in display_cols if c in filtered.columns]
-
-            st.dataframe(
-                filtered[display_cols].reset_index(drop=True),
-                use_container_width=True,
-            )
+            scanner_df = build_scanner_display(scores, universe)
+            filtered   = scanner_df[
+                scanner_df["region"].isin(region_filter)
+                & scanner_df["primary_bucket"].isin(bucket_filter)
+            ]
+            st.dataframe(filtered, use_container_width=True)
 
     # ────────────────────────────────────────────────────────────────────────
     # TAB 4: Exit Monitor
     # ────────────────────────────────────────────────────────────────────────
     with tab4:
-        if portfolio.empty or scores.empty:
+        display, n_red, n_yel = build_exit_monitor_display(portfolio, scores)
+
+        if display.empty:
             st.info("No portfolio or signal data yet.")
         else:
-            port_tickers = portfolio["ticker"].tolist()
-            port_scores  = scores[scores["ticker"].isin(port_tickers)].copy()
+            st.dataframe(display, use_container_width=True)
 
-            crowd_exit = 0.75
-            watch_thr  = 0.55
+            st.subheader("Crowding Score Distribution (Held Positions)")
+            crowd_data = display[["ticker", "crowding_score"]].dropna()
+            if not crowd_data.empty:
+                st.bar_chart(crowd_data.set_index("ticker")["crowding_score"])
 
-            def status_label(crowd):
-                if pd.isna(crowd):
-                    return "⚪ No data"
-                if crowd >= crowd_exit:
-                    return "🔴 EXIT"
-                if crowd >= watch_thr:
-                    return "🟡 WATCH"
-                return "🟢 OK"
-
-            if not port_scores.empty:
-                port_scores["status"] = port_scores["crowding_score"].apply(status_label)
-                display = port_scores[["ticker", "crowding_score", "quality_score",
-                                       "composite_score", "status"]].copy()
-                st.dataframe(display.sort_values("crowding_score", ascending=False),
-                             use_container_width=True)
-
-                st.subheader("Crowding Score Distribution (Held Positions)")
-                crowd_data = port_scores[["ticker", "crowding_score"]].dropna()
-                if not crowd_data.empty:
-                    st.bar_chart(crowd_data.set_index("ticker")["crowding_score"])
-
-                n_red  = (port_scores["crowding_score"] >= crowd_exit).sum()
-                n_yel  = ((port_scores["crowding_score"] >= watch_thr) & (port_scores["crowding_score"] < crowd_exit)).sum()
-                if n_red:
-                    st.error(f"🔴 {n_red} position(s) have triggered the EXIT threshold!")
-                if n_yel:
-                    st.warning(f"🟡 {n_yel} position(s) are approaching the exit threshold.")
+            if n_red:
+                st.error(f"🔴 {n_red} position(s) have triggered the EXIT threshold!")
+            if n_yel:
+                st.warning(f"🟡 {n_yel} position(s) are approaching the exit threshold.")
 
 
 if __name__ == "__main__":
