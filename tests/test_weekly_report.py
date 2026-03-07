@@ -5,7 +5,6 @@ generate_weekly_report writes a Markdown file to disk. We use tmp_path
 to avoid touching the real filesystem and patch get_risk_free_rate so no
 live macro data is needed.
 """
-import math
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
@@ -74,11 +73,11 @@ def _make_scored(*tickers, composite=0.70, quality=0.55,
 def _make_exits(*tickers, exit_triggered=True, crowding=0.80, quality=0.30):
     return pd.DataFrame([
         {
-            "ticker":          t,
-            "exit_triggered":  exit_triggered,
-            "crowding_score":  crowding,
-            "quality_score":   quality,
-            "exit_reasons":    ["crowding_exit"],
+            "ticker":         t,
+            "exit_triggered": exit_triggered,
+            "crowding_score": crowding,
+            "quality_score":  quality,
+            "exit_reasons":   ["crowding_exit"],
         }
         for t in tickers
     ])
@@ -108,26 +107,21 @@ def _run_report(tmp_path, actions=None, scored_df=None, params=None, conn=None):
 # ===========================================================================
 
 class TestFmtPct:
-    def test_normal_value(self):
-        assert _fmt_pct(0.075) == "7.5%"
+    @pytest.mark.parametrize("val,expected", [
+        (0.075,  "7.5%"),
+        (0.0,    "0.0%"),
+        (1.0,    "100.0%"),
+        (-0.05,  "-5.0%"),
+    ])
+    def test_numeric_values(self, val, expected):
+        assert _fmt_pct(val) == expected
 
-    def test_zero(self):
-        assert _fmt_pct(0.0) == "0.0%"
-
-    def test_one(self):
-        assert _fmt_pct(1.0) == "100.0%"
-
-    def test_none_returns_dash(self):
-        assert _fmt_pct(None) == "—"
-
-    def test_nan_returns_dash(self):
-        assert _fmt_pct(float("nan")) == "—"
+    @pytest.mark.parametrize("val", [None, float("nan")])
+    def test_missing_returns_dash(self, val):
+        assert _fmt_pct(val) == "—"
 
     def test_custom_decimals(self):
         assert _fmt_pct(0.12345, decimals=2) == "12.35%"
-
-    def test_negative(self):
-        assert _fmt_pct(-0.05) == "-5.0%"
 
 
 # ===========================================================================
@@ -135,25 +129,24 @@ class TestFmtPct:
 # ===========================================================================
 
 class TestFmtScore:
-    def test_normal_value(self):
-        assert _fmt_score(0.75) == "0.750"
+    @pytest.mark.parametrize("val,expected", [
+        (0.75, "0.750"),
+        (0.0,  "0.000"),
+        (1.0,  "1.000"),
+    ])
+    def test_numeric_values(self, val, expected):
+        assert _fmt_score(val) == expected
 
-    def test_zero(self):
-        assert _fmt_score(0.0) == "0.000"
-
-    def test_none_returns_dash(self):
-        assert _fmt_score(None) == "—"
-
-    def test_nan_returns_dash(self):
-        assert _fmt_score(float("nan")) == "—"
+    @pytest.mark.parametrize("val", [None, float("nan")])
+    def test_missing_returns_dash(self, val):
+        assert _fmt_score(val) == "—"
 
     def test_custom_decimals(self):
         assert _fmt_score(0.12345, decimals=2) == "0.12"
 
-    def test_rounds_half_up(self):
-        # 0.1235 → "0.124" at 3 dp with standard float rounding
-        result = _fmt_score(0.1235)
-        assert result in ("0.123", "0.124")   # accept either float-rounding result
+    def test_rounds_at_3dp(self):
+        # Python's float f-string rounding at 3dp — accept either banker's round
+        assert _fmt_score(0.1235) in ("0.123", "0.124")
 
 
 # ===========================================================================
@@ -167,23 +160,29 @@ class TestTrafficLight:
             "signals":   {"crowding_exit_threshold": exit_thr},
         }
 
-    def test_none_crowding_returns_white(self):
-        assert _traffic_light(None, self._p()) == "⚪"
+    @pytest.mark.parametrize("val", [None, float("nan")])
+    def test_missing_returns_white(self, val):
+        assert _traffic_light(val, self._p()) == "⚪"
 
-    def test_nan_crowding_returns_white(self):
-        assert _traffic_light(float("nan"), self._p()) == "⚪"
+    @pytest.mark.parametrize("val", [0.00, 0.30, 0.54])
+    def test_below_watch_is_green(self, val):
+        assert _traffic_light(val, self._p()) == "🟢"
 
-    def test_below_watch_is_green(self):
-        assert _traffic_light(0.30, self._p()) == "🟢"
+    @pytest.mark.parametrize("val", [0.55, 0.60, 0.74])
+    def test_watch_zone_is_yellow(self, val):
+        assert _traffic_light(val, self._p()) == "🟡"
+
+    @pytest.mark.parametrize("val", [0.75, 0.90, 1.00])
+    def test_exit_zone_is_red(self, val):
+        assert _traffic_light(val, self._p()) == "🔴"
+
+    def test_exact_boundary_watch(self):
+        assert _traffic_light(0.55, self._p()) == "🟡"
         assert _traffic_light(0.54, self._p()) == "🟢"
 
-    def test_watch_zone_is_yellow(self):
-        assert _traffic_light(0.55, self._p()) == "🟡"
-        assert _traffic_light(0.74, self._p()) == "🟡"
-
-    def test_exit_zone_is_red(self):
+    def test_exact_boundary_exit(self):
         assert _traffic_light(0.75, self._p()) == "🔴"
-        assert _traffic_light(0.90, self._p()) == "🔴"
+        assert _traffic_light(0.74, self._p()) == "🟡"
 
     def test_custom_thresholds(self):
         p = self._p(watch=0.40, exit_thr=0.60)
@@ -277,13 +276,14 @@ class TestReportSummary:
             "any_action": False,
             "new_portfolio": portfolio,
         })
-        assert "20.0%" in text   # invested
-        assert "80.0%" in text   # cash
+        assert "Invested: **20.0%**" in text
+        assert "Cash: **80.0%**" in text
 
     def test_exit_trigger_count(self, tmp_path):
-        exits = _make_exits("ETN", exit_triggered=True)
-        exits = pd.concat([exits, _make_exits("CCJ", exit_triggered=False)],
-                          ignore_index=True)
+        exits = pd.concat([
+            _make_exits("ETN", exit_triggered=True),
+            _make_exits("CCJ", exit_triggered=False),
+        ], ignore_index=True)
         _, text = _run_report(tmp_path, actions={
             "any_action": True,
             "new_portfolio": pd.DataFrame(),
@@ -307,8 +307,7 @@ class TestReportSummary:
             "new_portfolio": pd.DataFrame(),
             "watch_list": watch,
         })
-        assert "Watch list" in text
-        assert "**1**" in text
+        assert "Watch list (crowding elevated): **1**" in text
 
 
 # ===========================================================================
@@ -336,6 +335,19 @@ class TestReportActions:
         })
         assert "Positions to Exit" not in text
 
+    def test_multiple_exit_reasons_joined(self, tmp_path):
+        exits = pd.DataFrame([{
+            "ticker": "ETN", "exit_triggered": True,
+            "crowding_score": 0.80, "quality_score": 0.20,
+            "exit_reasons": ["crowding_exit", "quality_exit"],
+        }])
+        _, text = _run_report(tmp_path, actions={
+            "any_action": True,
+            "new_portfolio": pd.DataFrame(),
+            "exits": exits,
+        })
+        assert "crowding_exit; quality_exit" in text
+
     def test_entry_table_rendered(self, tmp_path):
         entries = _make_scored("CCJ", "NVDA", composite=0.72)
         _, text = _run_report(tmp_path, actions={
@@ -348,7 +360,7 @@ class TestReportActions:
         assert "NVDA" in text
 
     def test_entry_table_capped_at_top_candidates_count(self, tmp_path):
-        params = _base_params()
+        params  = _base_params()
         params["reporting"]["top_candidates_count"] = 3
         tickers = [f"T{i}" for i in range(10)]
         entries = _make_scored(*tickers)
@@ -357,17 +369,15 @@ class TestReportActions:
             "new_portfolio": pd.DataFrame(),
             "entries": entries,
         }, params=params)
-        # Only first 3 should appear; T9 should not
-        rows_in_table = [l for l in text.splitlines()
-                         if l.startswith("| T") and "Composite" not in l]
-        assert len(rows_in_table) == 3
+        # First 3 tickers appear; the 4th (T3) must not
+        assert "| T0 |" in text
+        assert "| T2 |" in text
+        assert "| T3 |" not in text
 
     def test_rebalance_table_rendered(self, tmp_path):
         diff = pd.DataFrame([
-            {"ticker": "ETN", "old_weight": 0.10, "new_weight": 0.08,
-             "action": "decrease"},
-            {"ticker": "CCJ", "old_weight": 0.06, "new_weight": 0.09,
-             "action": "increase"},
+            {"ticker": "ETN", "old_weight": 0.10, "new_weight": 0.08, "action": "decrease"},
+            {"ticker": "CCJ", "old_weight": 0.06, "new_weight": 0.09, "action": "increase"},
         ])
         _, text = _run_report(tmp_path, actions={
             "any_action": True,
@@ -381,8 +391,7 @@ class TestReportActions:
 
     def test_no_rebalance_section_when_only_new_add(self, tmp_path):
         diff = pd.DataFrame([
-            {"ticker": "NVDA", "old_weight": 0.0, "new_weight": 0.08,
-             "action": "add"},
+            {"ticker": "NVDA", "old_weight": 0.0, "new_weight": 0.08, "action": "add"},
         ])
         _, text = _run_report(tmp_path, actions={
             "any_action": True,
@@ -401,8 +410,7 @@ class TestReportPortfolio:
         portfolio = _make_portfolio("ETN", "CCJ")
         scored    = _make_scored("ETN", "CCJ")
         _, text = _run_report(tmp_path,
-                              actions={"any_action": False,
-                                       "new_portfolio": portfolio},
+                              actions={"any_action": False, "new_portfolio": portfolio},
                               scored_df=scored)
         assert "Current Portfolio" in text
         assert "ETN" in text
@@ -411,24 +419,29 @@ class TestReportPortfolio:
         _, text = _run_report(tmp_path)
         assert "Current Portfolio" not in text
 
-    def test_traffic_light_in_portfolio_row(self, tmp_path):
+    def test_traffic_light_red_in_portfolio_row(self, tmp_path):
         portfolio = _make_portfolio("ETN")
         scored    = _make_scored("ETN", crowding=0.80)
         _, text = _run_report(tmp_path,
-                              actions={"any_action": False,
-                                       "new_portfolio": portfolio},
+                              actions={"any_action": False, "new_portfolio": portfolio},
                               scored_df=scored)
         # crowding 0.80 ≥ exit threshold 0.75 → 🔴
         assert "🔴" in text
 
+    def test_traffic_light_green_when_crowding_low(self, tmp_path):
+        portfolio = _make_portfolio("ETN")
+        scored    = _make_scored("ETN", crowding=0.20)
+        _, text = _run_report(tmp_path,
+                              actions={"any_action": False, "new_portfolio": portfolio},
+                              scored_df=scored)
+        assert "🟢" in text
+
     def test_cash_reserve_line(self, tmp_path):
         portfolio = _make_portfolio("ETN", weight=0.10)
         _, text = _run_report(tmp_path,
-                              actions={"any_action": False,
-                                       "new_portfolio": portfolio},
+                              actions={"any_action": False, "new_portfolio": portfolio},
                               scored_df=_make_scored("ETN"))
-        assert "Cash reserve" in text
-        assert "90.0%" in text
+        assert "*Cash reserve: 90.0%*" in text
 
     def test_portfolio_sorted_by_weight_desc(self, tmp_path):
         portfolio = pd.DataFrame([
@@ -438,12 +451,19 @@ class TestReportPortfolio:
              "kelly_25pct": 0.08, "bucket_id": "nuclear"},
         ])
         _, text = _run_report(tmp_path,
-                              actions={"any_action": False,
-                                       "new_portfolio": portfolio},
+                              actions={"any_action": False, "new_portfolio": portfolio},
                               scored_df=_make_scored("ETN", "CCJ"))
-        etn_pos = text.index("| ETN |")
-        ccj_pos = text.index("| CCJ |")
-        assert ccj_pos < etn_pos   # CCJ (12%) before ETN (5%)
+        assert text.index("| CCJ |") < text.index("| ETN |")  # CCJ (12%) before ETN (5%)
+
+    def test_portfolio_ticker_missing_from_scores_shows_dashes(self, tmp_path):
+        """Score columns render '—' when the ticker has no signal data."""
+        portfolio = _make_portfolio("ORPHAN")
+        scored    = _make_scored("ETN")           # ORPHAN has no score
+        _, text = _run_report(tmp_path,
+                              actions={"any_action": False, "new_portfolio": portfolio},
+                              scored_df=scored)
+        assert "ORPHAN" in text
+        assert "—" in text                         # quality/crowding shown as dash
 
 
 # ===========================================================================
@@ -464,21 +484,21 @@ class TestReportUniverseTop:
     def test_no_entry_signal_rendered_as_dash(self, tmp_path):
         scored = _make_scored("CCJ", entry=False)
         _, text = _run_report(tmp_path, scored_df=scored)
+        # At least one cell should show "—" for the entry column
         assert "—" in text
 
     def test_candidates_capped_at_15(self, tmp_path):
         tickers = [f"T{i:02d}" for i in range(25)]
         scored  = _make_scored(*tickers)
         _, text = _run_report(tmp_path, scored_df=scored)
-        # Count table rows under "Universe Top Candidates"
-        uc_idx   = text.index("Universe Top Candidates")
-        uc_block = text[uc_idx:]
+        uc_idx    = text.index("Universe Top Candidates")
+        uc_block  = text[uc_idx:]
         data_rows = [l for l in uc_block.splitlines()
                      if l.startswith("| T") and "Composite" not in l]
         assert len(data_rows) == 15
 
     def test_nan_composite_excluded(self, tmp_path):
-        scored = _make_scored("ETN")
+        scored  = _make_scored("ETN")
         scored2 = pd.DataFrame([{
             "ticker": "GHOST", "composite_score": float("nan"),
             "quality_score": 0.5, "crowding_score": 0.2,
@@ -487,6 +507,18 @@ class TestReportUniverseTop:
         all_scored = pd.concat([scored, scored2], ignore_index=True)
         _, text = _run_report(tmp_path, scored_df=all_scored)
         assert "GHOST" not in text
+
+    def test_sorted_by_composite_descending(self, tmp_path):
+        scored = pd.DataFrame([
+            {"ticker": "LOW",  "composite_score": 0.60, "quality_score": 0.5,
+             "crowding_score": 0.2, "physical_norm": 0.6, "entry_signal": False, "kelly_25pct": 0.04},
+            {"ticker": "HIGH", "composite_score": 0.85, "quality_score": 0.7,
+             "crowding_score": 0.1, "physical_norm": 0.8, "entry_signal": True,  "kelly_25pct": 0.08},
+        ])
+        _, text = _run_report(tmp_path, scored_df=scored)
+        uc_idx  = text.index("Universe Top Candidates")
+        uc_text = text[uc_idx:]
+        assert uc_text.index("HIGH") < uc_text.index("LOW")
 
 
 # ===========================================================================
@@ -515,8 +547,7 @@ class TestReportWatchList:
             "new_portfolio": pd.DataFrame(),
             "watch_list": watch,
         })
-        # params crowding_exit_threshold = 0.75
-        assert "0.75" in text
+        assert "0.75" in text   # crowding_exit_threshold from _base_params
 
 
 # ===========================================================================
