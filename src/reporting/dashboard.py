@@ -47,13 +47,15 @@ def load_data():
         conn      = get_conn()
         portfolio = get_latest_portfolio(conn)
         scores    = get_latest_signal_scores(conn)
-        is_mock   = False
-    else:
+
+    if not DB_PATH.exists() or portfolio.empty or scores.empty:
         port_csv   = SNAPSHOT_DIR / "latest_portfolio.csv"
         scores_csv = SNAPSHOT_DIR / "latest_scores.csv"
         portfolio  = pd.read_csv(port_csv)   if port_csv.exists()   else pd.DataFrame()
         scores     = pd.read_csv(scores_csv) if scores_csv.exists() else pd.DataFrame()
         is_mock    = True
+    else:
+        is_mock    = False
 
     universe = load_universe()
     return portfolio, scores, universe, is_mock
