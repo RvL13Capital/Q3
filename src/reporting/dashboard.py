@@ -539,7 +539,7 @@ def run_dashboard():
             if portfolio.empty:
                 st.info("No portfolio data.")
             else:
-                st.dataframe(build_portfolio_display(portfolio, scores), use_container_width=True)
+                st.dataframe(build_portfolio_display(portfolio, scores), width="stretch")
 
         with col_right:
             st.markdown('<div style="font-size:0.65rem;font-family:\'Share Tech Mono\',monospace;'
@@ -549,7 +549,7 @@ def run_dashboard():
                           else "bucket_id" if "bucket_id" in portfolio.columns else None)
             if bucket_col and not portfolio.empty:
                 bucket_agg = portfolio.groupby(bucket_col)["weight"].sum().reset_index()
-                st.bar_chart(bucket_agg.set_index(bucket_col)["weight"], use_container_width=True, height=200)
+                st.bar_chart(bucket_agg.set_index(bucket_col)["weight"], width="stretch", height=200)
 
                 # per-bucket stats table
                 if not scores.empty:
@@ -562,7 +562,7 @@ def run_dashboard():
                     st.markdown('<div style="font-size:0.65rem;font-family:\'Share Tech Mono\',monospace;'
                                 'color:#4a8aac;letter-spacing:0.2em;margin:10px 0 4px">BUCKET SCORES</div>',
                                 unsafe_allow_html=True)
-                    st.dataframe(bkt_stats, use_container_width=True, hide_index=True)
+                    st.dataframe(bkt_stats, width="stretch", hide_index=True)
 
         # score distribution
         if not scores.empty:
@@ -572,13 +572,13 @@ def run_dashboard():
             with dc1:
                 st.markdown('<div style="font-size:0.65rem;font-family:\'Share Tech Mono\',monospace;color:#4a8aac;letter-spacing:0.2em;margin-bottom:4px">COMPOSITE SCORE</div>', unsafe_allow_html=True)
                 hist_comp = scores["composite_score"].value_counts(bins=15, sort=False).sort_index()
-                hist_comp.index = [f"{i.left:.2f}–{i.right:.2f}" for i in hist_comp.index]
-                st.bar_chart(hist_comp, use_container_width=True, height=130)
+                hist_df = pd.DataFrame({"bin": [f"{i.left:.2f}–{i.right:.2f}" for i in hist_comp.index], "count": hist_comp.values})
+                st.bar_chart(hist_df.set_index("bin"), width="stretch", height=130)
             with dc2:
                 st.markdown('<div style="font-size:0.65rem;font-family:\'Share Tech Mono\',monospace;color:#4a8aac;letter-spacing:0.2em;margin-bottom:4px">CROWDING SCORE</div>', unsafe_allow_html=True)
                 hist_crowd = scores["crowding_score"].value_counts(bins=15, sort=False).sort_index()
-                hist_crowd.index = [f"{i.left:.2f}–{i.right:.2f}" for i in hist_crowd.index]
-                st.bar_chart(hist_crowd, use_container_width=True, height=130)
+                hist_df2 = pd.DataFrame({"bin": [f"{i.left:.2f}–{i.right:.2f}" for i in hist_crowd.index], "count": hist_crowd.values})
+                st.bar_chart(hist_df2.set_index("bin"), width="stretch", height=130)
 
     # ── SCANNER ──────────────────────────────────────────────────────────
     elif section == "◈  SCANNER":
@@ -623,7 +623,7 @@ def run_dashboard():
                 col.markdown(_stat_card(lbl, str(val), accent=acc), unsafe_allow_html=True)
 
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-            st.dataframe(filtered, use_container_width=True)
+            st.dataframe(filtered, width="stretch")
 
             # top 10 entry signals callout
             if "entry_signal" in filtered.columns:
@@ -778,12 +778,12 @@ def run_dashboard():
             al, ar = st.columns([3, 2])
             with al:
                 st.markdown(_section_header("POSITION CROWDING TABLE"), unsafe_allow_html=True)
-                st.dataframe(display_alerts, use_container_width=True)
+                st.dataframe(display_alerts, width="stretch")
 
             with ar:
                 st.markdown(_section_header("CROWDING DISTRIBUTION"), unsafe_allow_html=True)
                 crowd_data = display_alerts[["ticker", "crowding_score"]].dropna().set_index("ticker")
-                st.bar_chart(crowd_data, use_container_width=True, height=200)
+                st.bar_chart(crowd_data, width="stretch", height=200)
 
                 # threshold lines as text
                 st.markdown(
