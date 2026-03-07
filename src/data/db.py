@@ -462,16 +462,25 @@ def get_latest_signal_scores(
 # Portfolio helpers
 # ---------------------------------------------------------------------------
 
+_PORTFOLIO_SNAPSHOT_COLS = [
+    "snapshot_date", "ticker", "weight", "composite_score", "kelly_25pct",
+    "bucket_id", "is_new_position", "rationale",
+]
+
+
 def upsert_portfolio_snapshot(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> int:
     if df.empty:
         return 0
     df = df.copy()
     df["snapshot_date"] = pd.to_datetime(df["snapshot_date"]).dt.date
-    conn.execute("""
-        INSERT OR REPLACE INTO portfolio_snapshots
-        SELECT * FROM df
+    present = [c for c in _PORTFOLIO_SNAPSHOT_COLS if c in df.columns]
+    df_insert = df[present].copy()
+    cols_sql = ", ".join(present)
+    conn.execute(f"""
+        INSERT OR REPLACE INTO portfolio_snapshots ({cols_sql})
+        SELECT {cols_sql} FROM df_insert
     """)
-    return len(df)
+    return len(df_insert)
 
 
 def get_latest_portfolio(conn: duckdb.DuckDBPyConnection) -> pd.DataFrame:
