@@ -243,14 +243,14 @@ h1 {
 h2 {
     font-family: 'Rajdhani', sans-serif !important;
     font-weight: 600; font-size: 0.8rem !important;
-    color: #2a7aaa !important;
+    color: #5a9abb !important;
     text-transform: uppercase; letter-spacing: 0.25em;
     margin: 18px 0 6px !important;
 }
 h3 {
     font-family: 'Share Tech Mono', monospace !important;
     font-size: 0.72rem !important;
-    color: #1a5a8a !important;
+    color: #4a8aac !important;
     letter-spacing: 0.15em;
     text-transform: uppercase;
     margin: 14px 0 4px !important;
@@ -267,7 +267,7 @@ h3 {
 [data-testid="stMetricLabel"] p {
     font-family: 'Share Tech Mono', monospace !important;
     font-size: 0.62rem !important;
-    color: #2a6a9a !important;
+    color: #5a9abb !important;
     letter-spacing: 0.18em;
     text-transform: uppercase;
 }
@@ -324,10 +324,10 @@ def _stat_card(label: str, value: str, sub: str = "", accent: str = "#00e5ff") -
         f'<div style="background:#070d1a;border:1px solid #0d2a4a;border-top:2px solid {accent};'
         f'padding:12px 16px;border-radius:2px;min-width:120px">'
         f'<div style="font-family:\'Share Tech Mono\',monospace;font-size:0.6rem;'
-        f'letter-spacing:0.2em;text-transform:uppercase;color:#2a6a9a">{label}</div>'
+        f'letter-spacing:0.2em;text-transform:uppercase;color:#5a9abb">{label}</div>'
         f'<div style="font-family:\'Share Tech Mono\',monospace;font-size:1.55rem;'
         f'color:{accent};margin:4px 0 2px">{value}</div>'
-        f'<div style="font-size:0.7rem;color:#1a4a6a">{sub}</div>'
+        f'<div style="font-size:0.7rem;color:#4a8aac">{sub}</div>'
         f'</div>'
     )
 
@@ -337,7 +337,7 @@ def _section_header(title: str, subtitle: str = "") -> str:
         f'<div style="border-left:3px solid #00e5ff;padding:4px 0 4px 12px;margin-bottom:14px">'
         f'<span style="font-family:\'Rajdhani\',sans-serif;font-weight:700;font-size:0.95rem;'
         f'color:#00e5ff;text-transform:uppercase;letter-spacing:0.2em">{title}</span>'
-        + (f'<span style="font-size:0.72rem;color:#2a5a7a;margin-left:12px">{subtitle}</span>' if subtitle else "")
+        + (f'<span style="font-size:0.72rem;color:#5a9abb;margin-left:12px">{subtitle}</span>' if subtitle else "")
         + '</div>'
     )
 
@@ -348,7 +348,7 @@ def _score_bar(label: str, value: float, max_val: float = 1.0, color: str = "#00
         f'<div style="margin-bottom:7px">'
         f'<div style="display:flex;justify-content:space-between;'
         f'font-family:\'Share Tech Mono\',monospace;font-size:0.68rem;margin-bottom:3px">'
-        f'<span style="color:#4a8aaa">{label}</span>'
+        f'<span style="color:#6aabcb">{label}</span>'
         f'<span style="color:{color}">{value:.3f}</span></div>'
         f'<div style="background:#0a1828;border-radius:1px;height:4px">'
         f'<div style="width:{pct:.1f}%;height:100%;background:{color};'
@@ -397,7 +397,7 @@ def run_dashboard():
             '<div style="font-family:\'Share Tech Mono\',monospace;font-size:1.05rem;'
             'color:#00e5ff;letter-spacing:0.2em;text-shadow:0 0 12px #00e5ff60;'
             'padding:8px 0 4px">◈ EARKE Q3</div>'
-            '<div style="font-size:0.62rem;color:#1a5a7a;letter-spacing:0.25em;'
+            '<div style="font-size:0.62rem;color:#4a8aac;letter-spacing:0.25em;'
             'margin-bottom:16px">MEGATREND COMMAND CENTER</div>',
             unsafe_allow_html=True,
         )
@@ -422,7 +422,7 @@ def run_dashboard():
         # sidebar system stats
         st.markdown(
             '<div style="font-family:\'Share Tech Mono\',monospace;font-size:0.62rem;'
-            'letter-spacing:0.15em;color:#1a5a7a">SYSTEM STATS</div>',
+            'letter-spacing:0.15em;color:#4a8aac">SYSTEM STATS</div>',
             unsafe_allow_html=True,
         )
         for lbl, val in [
@@ -437,7 +437,7 @@ def run_dashboard():
                 f'<div style="display:flex;justify-content:space-between;'
                 f'font-family:\'Share Tech Mono\',monospace;font-size:0.65rem;'
                 f'padding:3px 0;border-bottom:1px solid #0a1828">'
-                f'<span style="color:#2a5a7a">{lbl}</span>'
+                f'<span style="color:#5a9abb">{lbl}</span>'
                 f'<span style="color:#4a9aba">{val}</span></div>',
                 unsafe_allow_html=True,
             )
@@ -476,7 +476,7 @@ def run_dashboard():
 
         with col_left:
             st.markdown('<div style="font-size:0.65rem;font-family:\'Share Tech Mono\',monospace;'
-                        'color:#1a5a7a;letter-spacing:0.2em;margin-bottom:4px">HOLDINGS</div>',
+                        'color:#4a8aac;letter-spacing:0.2em;margin-bottom:4px">HOLDINGS</div>',
                         unsafe_allow_html=True)
             if portfolio.empty:
                 st.info("No portfolio data.")
@@ -485,7 +485,7 @@ def run_dashboard():
 
         with col_right:
             st.markdown('<div style="font-size:0.65rem;font-family:\'Share Tech Mono\',monospace;'
-                        'color:#1a5a7a;letter-spacing:0.2em;margin-bottom:4px">BUCKET ALLOCATION</div>',
+                        'color:#4a8aac;letter-spacing:0.2em;margin-bottom:4px">BUCKET ALLOCATION</div>',
                         unsafe_allow_html=True)
             bucket_col = ("primary_bucket" if "primary_bucket" in portfolio.columns
                           else "bucket_id" if "bucket_id" in portfolio.columns else None)
@@ -502,7 +502,7 @@ def run_dashboard():
                                       avg_crowd=("crowding_score","mean"))
                                  .round(3).reset_index())
                     st.markdown('<div style="font-size:0.65rem;font-family:\'Share Tech Mono\',monospace;'
-                                'color:#1a5a7a;letter-spacing:0.2em;margin:10px 0 4px">BUCKET SCORES</div>',
+                                'color:#4a8aac;letter-spacing:0.2em;margin:10px 0 4px">BUCKET SCORES</div>',
                                 unsafe_allow_html=True)
                     st.dataframe(bkt_stats, use_container_width=True, hide_index=True)
 
@@ -512,11 +512,11 @@ def run_dashboard():
             st.markdown(_section_header("SCORE DISTRIBUTION", f"{n_universe} universe tickers"), unsafe_allow_html=True)
             dc1, dc2 = st.columns(2)
             with dc1:
-                st.markdown('<div style="font-size:0.65rem;font-family:\'Share Tech Mono\',monospace;color:#1a5a7a;letter-spacing:0.2em;margin-bottom:4px">COMPOSITE SCORE</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size:0.65rem;font-family:\'Share Tech Mono\',monospace;color:#4a8aac;letter-spacing:0.2em;margin-bottom:4px">COMPOSITE SCORE</div>', unsafe_allow_html=True)
                 hist_comp = scores["composite_score"].value_counts(bins=15, sort=False).sort_index()
                 st.bar_chart(hist_comp, use_container_width=True, height=130)
             with dc2:
-                st.markdown('<div style="font-size:0.65rem;font-family:\'Share Tech Mono\',monospace;color:#1a5a7a;letter-spacing:0.2em;margin-bottom:4px">CROWDING SCORE</div>', unsafe_allow_html=True)
+                st.markdown('<div style="font-size:0.65rem;font-family:\'Share Tech Mono\',monospace;color:#4a8aac;letter-spacing:0.2em;margin-bottom:4px">CROWDING SCORE</div>', unsafe_allow_html=True)
                 hist_crowd = scores["crowding_score"].value_counts(bins=15, sort=False).sort_index()
                 st.bar_chart(hist_crowd, use_container_width=True, height=130)
 
@@ -640,7 +640,7 @@ def run_dashboard():
                             f'<div style="display:flex;justify-content:space-between;'
                             f'font-family:\'Share Tech Mono\',monospace;font-size:0.7rem;'
                             f'padding:6px 0;border-bottom:1px solid #0a1828">'
-                            f'<span style="color:#2a6a9a">{lbl}</span>'
+                            f'<span style="color:#5a9abb">{lbl}</span>'
                             f'<span style="color:#00ff88">{v_str}</span></div>',
                             unsafe_allow_html=True,
                         )
@@ -657,7 +657,7 @@ def run_dashboard():
                             f'<div style="display:flex;justify-content:space-between;'
                             f'font-family:\'Share Tech Mono\',monospace;font-size:0.7rem;'
                             f'padding:6px 0;border-bottom:1px solid #0a1828">'
-                            f'<span style="color:#2a6a9a">{lbl}</span>'
+                            f'<span style="color:#5a9abb">{lbl}</span>'
                             f'<span style="color:{c}">{v_str}</span></div>',
                             unsafe_allow_html=True,
                         )
@@ -675,22 +675,22 @@ def run_dashboard():
                             f'<div style="display:flex;justify-content:space-between;'
                             f'font-family:\'Share Tech Mono\',monospace;font-size:0.7rem;'
                             f'padding:6px 0;border-bottom:1px solid #0a1828">'
-                            f'<span style="color:#2a6a9a">{lbl}</span>'
+                            f'<span style="color:#5a9abb">{lbl}</span>'
                             f'<span style="color:#ffb800">{v_str}</span></div>',
                             unsafe_allow_html=True,
                         )
 
                     in_portfolio = selected in in_port
                     status_txt = "IN PORTFOLIO" if in_portfolio else "NOT HELD"
-                    status_c   = "#00ff88" if in_portfolio else "#2a5a7a"
+                    status_c   = "#00ff88" if in_portfolio else "#5a9abb"
                     entry_sig  = row.get("entry_signal", False)
                     signal_txt = "ENTRY SIGNAL ●" if entry_sig else "NO SIGNAL ○"
-                    signal_c   = "#00ff88" if entry_sig else "#2a5a7a"
+                    signal_c   = "#00ff88" if entry_sig else "#5a9abb"
                     st.markdown(
                         f'<div style="background:#070d1a;border:1px solid #0d2a4a;border-radius:2px;'
                         f'padding:14px;margin-top:14px">'
                         f'<div style="font-family:\'Share Tech Mono\',monospace;font-size:0.65rem;'
-                        f'color:#1a5a7a;letter-spacing:0.2em;margin-bottom:8px">STATUS</div>'
+                        f'color:#4a8aac;letter-spacing:0.2em;margin-bottom:8px">STATUS</div>'
                         f'<div style="font-family:\'Share Tech Mono\',monospace;font-size:0.85rem;'
                         f'color:{status_c};margin-bottom:6px">{status_txt}</div>'
                         f'<div style="font-family:\'Share Tech Mono\',monospace;font-size:0.85rem;'
