@@ -197,8 +197,8 @@ def run_weekly_scoring(
     scored_df = pd.DataFrame(rows)
     upsert_signal_scores(conn, scored_df)
 
-    n_entry = scored_df["entry_signal"].sum()
-    n_exit  = scored_df["exit_signal"].sum()
+    n_entry = int(scored_df["entry_signal"].sum()) if "entry_signal" in scored_df.columns else 0
+    n_exit  = int(scored_df["exit_signal"].sum())  if "exit_signal"  in scored_df.columns else 0
     logger.info(f"Scoring complete: {n_entry} entry signals, {n_exit} exit signals")
 
     return scored_df

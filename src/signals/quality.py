@@ -148,10 +148,10 @@ def compute_inflation_convexity(
     if n_rev < 2:
         return float("nan"), 0.5, max(0.0, n_rev / lookback_years)
 
-    # Revenue CAGR
-    r_start = revenues["revenue"].iloc[-1]   # oldest
-    r_end   = revenues["revenue"].iloc[0]    # newest
-    years   = revenues["fiscal_year"].iloc[0] - revenues["fiscal_year"].iloc[-1]
+    # Revenue CAGR (revenues sorted ascending by fiscal_year)
+    r_start = revenues["revenue"].iloc[0]    # oldest
+    r_end   = revenues["revenue"].iloc[-1]   # newest
+    years   = revenues["fiscal_year"].iloc[-1] - revenues["fiscal_year"].iloc[0]
     if years <= 0 or r_start <= 0:
         return float("nan"), 0.5, 0.0
 

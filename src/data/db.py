@@ -411,16 +411,30 @@ def get_trends(
 # Signal score helpers
 # ---------------------------------------------------------------------------
 
+_SIGNAL_SCORE_COLS = [
+    "ticker", "score_date", "physical_raw", "physical_norm", "physical_confidence",
+    "quality_score", "quality_confidence", "roic_wacc_spread", "margin_snr",
+    "inflation_convexity", "crowding_score", "crowding_confidence", "etf_correlation",
+    "trends_norm", "short_pct", "composite_score", "composite_confidence",
+    "mu_estimate", "sigma_estimate", "kelly_fraction", "kelly_25pct",
+    "entry_signal", "exit_signal",
+]
+
+
 def upsert_signal_scores(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> int:
     if df.empty:
         return 0
     df = df.copy()
     df["score_date"] = pd.to_datetime(df["score_date"]).dt.date
-    conn.execute("""
-        INSERT OR REPLACE INTO signal_scores
-        SELECT * FROM df
+    # Ensure columns match schema order (avoids SELECT * positional mismatch)
+    present = [c for c in _SIGNAL_SCORE_COLS if c in df.columns]
+    df_insert = df[present].copy()
+    cols_sql = ", ".join(present)
+    conn.execute(f"""
+        INSERT OR REPLACE INTO signal_scores ({cols_sql})
+        SELECT {cols_sql} FROM df_insert
     """)
-    return len(df)
+    return len(df_insert)
 
 
 def get_latest_signal_scores(
