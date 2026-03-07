@@ -19,7 +19,8 @@ import streamlit as st
 from src.data.db       import get_connection, get_latest_portfolio, get_latest_signal_scores
 from src.data.universe import load_universe
 
-DB_PATH = Path(__file__).parent.parent.parent / "data" / "q3.duckdb"
+DB_PATH       = Path(__file__).parent.parent.parent / "data" / "q3.duckdb"
+SNAPSHOT_DIR  = Path(__file__).parent.parent.parent / "snapshots"
 
 # Single source of truth for exit/watch thresholds used by Tab 4
 # (matches params["signals"]["crowding_exit_threshold"] and
@@ -37,10 +38,18 @@ def get_conn():
 
 @st.cache_data(ttl=300)
 def load_data():
-    conn = get_conn()
-    portfolio = get_latest_portfolio(conn)
-    scores    = get_latest_signal_scores(conn)
-    universe  = load_universe()
+    """Load portfolio and scores from DuckDB if available, else fall back to CSV snapshots."""
+    if DB_PATH.exists():
+        conn      = get_conn()
+        portfolio = get_latest_portfolio(conn)
+        scores    = get_latest_signal_scores(conn)
+    else:
+        port_csv   = SNAPSHOT_DIR / "latest_portfolio.csv"
+        scores_csv = SNAPSHOT_DIR / "latest_scores.csv"
+        portfolio  = pd.read_csv(port_csv)   if port_csv.exists()   else pd.DataFrame()
+        scores     = pd.read_csv(scores_csv) if scores_csv.exists() else pd.DataFrame()
+
+    universe = load_universe()
     return portfolio, scores, universe
 
 
