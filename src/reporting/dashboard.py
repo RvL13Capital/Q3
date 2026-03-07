@@ -27,6 +27,13 @@ _WATCH_THR  = 0.55
 
 _SCORE_COLS = ["ticker", "composite_score", "quality_score", "crowding_score", "physical_norm"]
 
+_SECTIONS: dict[str, str] = {
+    "OVERVIEW": "⬡  OVERVIEW",
+    "SCANNER":  "◈  SCANNER",
+    "SIGNALS":  "◉  SIGNALS",
+    "ALERTS":   "⚠  ALERTS",
+}
+
 
 @st.cache_resource
 def get_conn():
@@ -308,6 +315,41 @@ hr { border-color: #0d2a4a !important; margin: 10px 0 !important; }
 /* ── Bar chart axis ──────────────────────────────────────────── */
 [data-testid="stVegaLiteChart"] { border: 1px solid #0d2a4a; }
 
+/* ── Top nav strip ───────────────────────────────────────────── */
+.q3-nav {
+    display: flex;
+    gap: 4px;
+    margin: 0 0 18px;
+    border-bottom: 1px solid #0d2a4a;
+    padding-bottom: 8px;
+}
+.q3-nav-item {
+    flex: 1;
+    text-align: center;
+    padding: 7px 4px;
+    background: transparent;
+    border: 1px solid #0d2a4a;
+    border-radius: 2px;
+    color: #5a9abb;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-decoration: none;
+    text-transform: uppercase;
+    transition: all 0.15s;
+}
+.q3-nav-item:hover {
+    border-color: #00e5ff;
+    color: #00e5ff;
+    background: #00e5ff0a;
+}
+.q3-nav-active {
+    border-color: #00e5ff !important;
+    border-top: 2px solid #00e5ff !important;
+    color: #00e5ff !important;
+    background: #00e5ff12 !important;
+}
+
 /* ── Scrollbar ───────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: #04080f; }
@@ -412,11 +454,20 @@ def run_dashboard():
         )
 
         st.markdown("---")
-        section = st.radio(
+        _tab = st.query_params.get("tab", "OVERVIEW")
+        if _tab not in _SECTIONS:
+            _tab = "OVERVIEW"
+        _sidebar_pick = st.radio(
             "NAVIGATION",
-            ["⬡  OVERVIEW", "◈  SCANNER", "◉  SIGNALS", "⚠  ALERTS"],
+            list(_SECTIONS.values()),
+            index=list(_SECTIONS.keys()).index(_tab),
             label_visibility="collapsed",
         )
+        if _sidebar_pick != _SECTIONS[_tab]:
+            _new_key = {v: k for k, v in _SECTIONS.items()}[_sidebar_pick]
+            st.query_params["tab"] = _new_key
+            st.rerun()
+        section = _SECTIONS[_tab]
         st.markdown("---")
 
         # sidebar system stats
@@ -467,6 +518,14 @@ def run_dashboard():
             st.markdown(_stat_card(lbl, str(val), accent=acc), unsafe_allow_html=True)
 
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+    # ── persistent top nav strip ──────────────────────────────────────────
+    _nav_html = '<div class="q3-nav">'
+    for _key, _label in _SECTIONS.items():
+        _cls = "q3-nav-item q3-nav-active" if _key == _tab else "q3-nav-item"
+        _nav_html += f'<a href="?tab={_key}" class="{_cls}">{_label}</a>'
+    _nav_html += '</div>'
+    st.markdown(_nav_html, unsafe_allow_html=True)
 
     # ── OVERVIEW ─────────────────────────────────────────────────────────
     if section == "⬡  OVERVIEW":
