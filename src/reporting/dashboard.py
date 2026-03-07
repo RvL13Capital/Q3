@@ -560,7 +560,7 @@ def run_dashboard():
                 ],
                 ["#00e5ff", "#00ff88", "#ffb800", "#ff3060"],
             ):
-                col.markdown(_stat_card(lbl, str(val), acc=acc), unsafe_allow_html=True)
+                col.markdown(_stat_card(lbl, str(val), accent=acc), unsafe_allow_html=True)
 
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
             st.dataframe(filtered, use_container_width=True, height=480)
