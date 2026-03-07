@@ -114,13 +114,33 @@ def fetch_prices_eodhd(
     start_date: str,
     end_date: str,
     api_key: str,
+    api_keys: Optional[list[str]] = None,
 ) -> pd.DataFrame:
     """
     Fetch from EODHD /eod endpoint.
     tickers_map: {original_ticker: eodhd_format_ticker}
+    api_keys: if provided, rotates to next key on 401/429.
     Returns long-format DataFrame matching prices table schema.
     """
     import requests
+
+    keys = api_keys if api_keys else [api_key]
+    key_index = [0]  # mutable for inner use
+
+    def _get(url, params):
+        for attempt in range(len(keys)):
+            params["api_token"] = keys[key_index[0]]
+            resp = requests.get(url, params=params, timeout=30)
+            if resp.status_code in (401, 429):
+                logger.warning(
+                    f"EODHD key index {key_index[0]} returned {resp.status_code}, rotating"
+                )
+                key_index[0] = (key_index[0] + 1) % len(keys)
+                continue
+            resp.raise_for_status()
+            return resp
+        resp.raise_for_status()
+        return resp
 
     rows = []
     base_url = "https://eodhd.com/api/eod"
@@ -129,14 +149,13 @@ def fetch_prices_eodhd(
         try:
             url = f"{base_url}/{eodhd_ticker}"
             params = {
-                "api_token": api_key,
+                "api_token": keys[key_index[0]],
                 "fmt": "json",
                 "from": start_date,
                 "to": end_date,
                 "period": "d",
             }
-            resp = requests.get(url, params=params, timeout=30)
-            resp.raise_for_status()
+            resp = _get(url, params)
             data = resp.json()
             if not data:
                 continue
@@ -181,6 +200,7 @@ def update_prices(
     params: dict,
     extra_tickers: Optional[list[str]] = None,  # e.g. sector ETFs, market indices
     eodhd_api_key: Optional[str] = None,
+    eodhd_api_keys: Optional[list[str]] = None,
     force_refresh: bool = False,
 ) -> dict[str, str]:
     """
@@ -267,7 +287,8 @@ def update_prices(
             ]
             if eu_tickers:
                 eodhd_input = {t: eodhd_map[t] for t in eu_tickers}
-                df = fetch_prices_eodhd(eodhd_input, start, today, eodhd_api_key)
+                df = fetch_prices_eodhd(eodhd_input, start, today, eodhd_api_key,
+                                        api_keys=eodhd_api_keys)
 
         if df.empty:
             for t in group_tickers:

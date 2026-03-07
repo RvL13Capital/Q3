@@ -226,23 +226,38 @@ def fetch_fundamentals_eodhd(
     accounting_std: str,
     currency: str,
     lookback_years: int = 5,
+    api_keys: Optional[list[str]] = None,
 ) -> pd.DataFrame:
     """
     Fetch fundamentals from EODHD /fundamentals endpoint.
     Handles IFRS right-of-use assets for EU stocks.
+    api_keys: if provided, rotates to next key on 401/429.
     """
+    keys = api_keys if api_keys else [api_key]
     url = f"https://eodhd.com/api/fundamentals/{eodhd_ticker}"
-    params = {
-        "api_token": api_key,
-        "fmt": "json",
-        "filter": "Financials",
-    }
-    try:
-        resp = requests.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        logger.warning(f"EODHD fundamentals fetch failed for {eodhd_ticker}: {e}")
+
+    data = None
+    for i, key in enumerate(keys):
+        params = {
+            "api_token": key,
+            "fmt": "json",
+            "filter": "Financials",
+        }
+        try:
+            resp = requests.get(url, params=params, timeout=30)
+            if resp.status_code in (401, 429) and i < len(keys) - 1:
+                logger.warning(
+                    f"EODHD key index {i} returned {resp.status_code} for {eodhd_ticker}, rotating"
+                )
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            break
+        except Exception as e:
+            logger.warning(f"EODHD fundamentals fetch failed for {eodhd_ticker}: {e}")
+            return pd.DataFrame()
+
+    if data is None:
         return pd.DataFrame()
 
     financials = data if isinstance(data, dict) else {}
@@ -395,6 +410,7 @@ def update_fundamentals(
     universe_df: pd.DataFrame,
     params: dict,
     eodhd_api_key: Optional[str] = None,
+    eodhd_api_keys: Optional[list[str]] = None,
     force_refresh: bool = False,
 ) -> dict[str, str]:
     """
@@ -431,7 +447,8 @@ def update_fundamentals(
                     logger.info(f"{ticker}: fell back to yfinance fundamentals")
         elif eodhd_api_key and eodhd_ticker:
             df = fetch_fundamentals_eodhd(ticker, eodhd_ticker, eodhd_api_key,
-                                          accounting_std, currency)
+                                          accounting_std, currency,
+                                          api_keys=eodhd_api_keys)
             if df.empty:
                 df = fetch_fundamentals_yfinance(ticker, accounting_std, currency)
         else:

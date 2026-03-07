@@ -80,11 +80,15 @@ def run_weekly_pipeline(
     # API keys from environment
     fred_api_key  = os.getenv("FRED_API_KEY")
     eodhd_api_key = os.getenv("EODHD_API_KEY")
+    eodhd_api_key_2 = os.getenv("EODHD_API_KEY_2")
+    eodhd_keys = [k for k in [eodhd_api_key, eodhd_api_key_2] if k]
 
     if not fred_api_key:
         logger.warning("FRED_API_KEY not set — US/CA macro data unavailable")
-    if not eodhd_api_key:
+    if not eodhd_keys:
         logger.warning("EODHD_API_KEY not set — using yfinance for all data")
+    elif len(eodhd_keys) > 1:
+        logger.info(f"EODHD: {len(eodhd_keys)} API keys loaded (key rotation enabled)")
 
     # ── 2. Data Refresh ──────────────────────────────────────────────────────
     if not skip_fetch:
@@ -95,7 +99,8 @@ def run_weekly_pipeline(
         price_results = update_prices(
             conn, universe, params,
             extra_tickers=extra_tickers,
-            eodhd_api_key=eodhd_api_key,
+            eodhd_api_key=eodhd_keys[0] if eodhd_keys else None,
+            eodhd_api_keys=eodhd_keys,
             force_refresh=force_refresh,
         )
         n_updated = sum(1 for v in price_results.values() if v == "updated")
@@ -108,7 +113,8 @@ def run_weekly_pipeline(
 
         fund_results = update_fundamentals(
             conn, universe, params,
-            eodhd_api_key=eodhd_api_key,
+            eodhd_api_key=eodhd_keys[0] if eodhd_keys else None,
+            eodhd_api_keys=eodhd_keys,
             force_refresh=force_refresh,
         )
         n_fund_updated = sum(1 for v in fund_results.values() if v == "updated")
