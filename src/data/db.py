@@ -142,9 +142,8 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
             inflation_convexity DOUBLE,
             crowding_score      DOUBLE,
             crowding_confidence DOUBLE,
-            etf_correlation     DOUBLE,
-            trends_norm         DOUBLE,
-            short_pct           DOUBLE,
+            autocorr_delta      DOUBLE,
+            absorption_delta    DOUBLE,
             composite_score     DOUBLE,
             composite_confidence DOUBLE,
             mu_estimate         DOUBLE,
@@ -414,8 +413,9 @@ def get_trends(
 _SIGNAL_SCORE_COLS = [
     "ticker", "score_date", "physical_raw", "physical_norm", "physical_confidence",
     "quality_score", "quality_confidence", "roic_wacc_spread", "margin_snr",
-    "inflation_convexity", "crowding_score", "crowding_confidence", "etf_correlation",
-    "trends_norm", "short_pct", "composite_score", "composite_confidence",
+    "inflation_convexity", "crowding_score", "crowding_confidence",
+    "autocorr_delta", "absorption_delta",
+    "composite_score", "composite_confidence",
     "mu_estimate", "sigma_estimate", "kelly_fraction", "kelly_25pct",
     "entry_signal", "exit_signal",
 ]

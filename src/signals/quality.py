@@ -1,13 +1,15 @@
 """
-Signal 2: Quality / Moat Score (X_P)
+Signal 2: Quality / Moat Score (X_P) — EARKE eq 5
 
-Three sub-components:
-  1. ROIC − WACC spread     (profitability above cost of capital)
-  2. Gross margin SNR        (margin stability = moat strength)
-  3. Inflation convexity     (pricing power: revenue growth > PPI)
+  X_P,i,t = max(0, E[ROIC − WACC]) × (1 / σ(GM)) × exp(γ · max(0, ∂GM/∂PPI))
 
-Each sub-score is 0–1 with a confidence weight.
-Confidence-weighted average → final quality_score 0–1.
+Three sub-components, each normalized to [0, 1], then multiplied:
+  1. ROIC − WACC spread     (hard gate: spread ≤ 0 → X_P = 0 immediately)
+  2. Gross margin SNR        (1/σ(GM) normalized: margin stability = moat)
+  3. Inflation convexity     (exp(γ·∂GM/∂PPI): pricing power vs input costs)
+
+Multiplicative structure: all three must be favourable simultaneously.
+If ROIC ≤ WACC, quality = 0 regardless of other factors.
 """
 import logging
 from typing import Optional
@@ -201,18 +203,14 @@ def compute_quality_score(
         ticker, conn, params, as_of_date, region
     )
 
-    # Confidence-weighted average of sub-scores
-    total_conf = roic_conf + margin_conf + conv_conf
-    if total_conf == 0:
-        quality_score = 0.5
-        quality_conf  = 0.0
+    # Multiplicative per eq 5: X_P = roic_score × margin_score × conv_score
+    # Hard gate: if ROIC ≤ WACC (roic_score == 0), quality = 0 immediately.
+    if roic_score == 0.0 or roic_conf == 0.0:
+        quality_score = 0.0
+        quality_conf  = roic_conf
     else:
-        quality_score = (
-            roic_score * roic_conf +
-            margin_score * margin_conf +
-            conv_score * conv_conf
-        ) / total_conf
-        quality_conf = total_conf / 3.0  # average confidence
+        quality_score = roic_score * margin_score * conv_score
+        quality_conf  = (roic_conf + margin_conf + conv_conf) / 3.0
 
     return {
         "ticker":               ticker,
