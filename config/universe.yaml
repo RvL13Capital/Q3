@@ -501,16 +501,6 @@ stocks:
     primary_bucket: ai_infra
     trends_keyword: "Broadcom AI chip networking"
 
-  - ticker: "CEG"
-    name: "Constellation Energy"
-    exchange: NASDAQ
-    region: US
-    currency: USD
-    accounting_std: GAAP
-    buckets: [nuclear, grid]
-    primary_bucket: nuclear
-    trends_keyword: "nuclear power data center"
-
   - ticker: "ANET"
     name: "Arista Networks"
     exchange: NYSE
@@ -1436,3 +1426,1023 @@ stocks:
     primary_bucket: ai_infra
     trends_keyword: "Comet plasma RF semiconductor"
     isin: "CH0360826991"
+
+  # ────────────────────────────────────────────────
+  # GRID & POWER INFRASTRUCTURE (expansion)
+  # ────────────────────────────────────────────────
+  - ticker: "GEV"
+    name: "GE Vernova"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [grid, ai_infra]
+    primary_bucket: grid
+    trends_keyword: "GE Vernova grid power generation turbine"
+
+  - ticker: "WCC"
+    name: "WESCO International"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "WESCO electrical distribution utility"
+
+  - ticker: "NEX.PA"
+    eodhd_ticker: "NEX.PA"
+    name: "Nexans"
+    exchange: EURONEXT
+    region: EU
+    currency: EUR
+    accounting_std: IFRS
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "Nexans cable high voltage grid"
+    isin: "FR0000044448"
+
+  - ticker: "LR.PA"
+    eodhd_ticker: "LR.PA"
+    name: "Legrand"
+    exchange: EURONEXT
+    region: EU
+    currency: EUR
+    accounting_std: IFRS
+    buckets: [grid, ai_infra]
+    primary_bucket: grid
+    trends_keyword: "Legrand electrical infrastructure data center"
+    isin: "FR0010307819"
+
+  - ticker: "IBE.MC"
+    eodhd_ticker: "IBE.MC"
+    name: "Iberdrola"
+    exchange: BME
+    region: EU
+    currency: EUR
+    accounting_std: IFRS
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "Iberdrola electricity grid renewable Spain"
+    isin: "ES0144580Y14"
+
+  - ticker: "ELI.BR"
+    eodhd_ticker: "ELI.BR"
+    name: "Elia Group"
+    exchange: EURONEXT
+    region: EU
+    currency: EUR
+    accounting_std: IFRS
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "Elia transmission system operator Belgium Germany"
+    isin: "BE0003822393"
+
+  - ticker: "AES"
+    name: "AES Corporation"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "AES energy grid utility storage"
+
+  # ────────────────────────────────────────────────
+  # NUCLEAR ENERGY (expansion)
+  # ────────────────────────────────────────────────
+  - ticker: "SMR"
+    name: "NuScale Power"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [nuclear]
+    primary_bucket: nuclear
+    trends_keyword: "NuScale small modular reactor SMR"
+
+  - ticker: "DUK"
+    name: "Duke Energy"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [nuclear, grid]
+    primary_bucket: nuclear
+    trends_keyword: "Duke Energy nuclear power utility"
+
+  - ticker: "KAP.L"
+    eodhd_ticker: "KAP.LSE"
+    name: "Kazatomprom"
+    exchange: LSE
+    region: EU
+    currency: USD
+    accounting_std: IFRS
+    buckets: [nuclear, critical_materials]
+    primary_bucket: nuclear
+    trends_keyword: "Kazatomprom uranium Kazakhstan"
+    isin: "US46337Y1082"
+
+  - ticker: "UROY"
+    name: "Uranium Royalty Corp"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [nuclear, critical_materials]
+    primary_bucket: nuclear
+    trends_keyword: "uranium royalty streaming nuclear fuel"
+
+  # ────────────────────────────────────────────────
+  # DEFENSE (expansion)
+  # ────────────────────────────────────────────────
+  - ticker: "HAG.DE"
+    eodhd_ticker: "HAG.XETRA"
+    name: "Hensoldt"
+    exchange: XETRA
+    region: EU
+    currency: EUR
+    accounting_std: IFRS
+    buckets: [defense, ai_infra]
+    primary_bucket: defense
+    trends_keyword: "Hensoldt radar sensor defense Germany"
+    isin: "DE000HAG0005"
+
+  - ticker: "RENK.DE"
+    eodhd_ticker: "RENK.XETRA"
+    name: "Renk Group"
+    exchange: XETRA
+    region: EU
+    currency: EUR
+    accounting_std: IFRS
+    buckets: [defense]
+    primary_bucket: defense
+    trends_keyword: "Renk defense vehicle transmission drives"
+    isin: "DE000RENK070"
+
+  - ticker: "HII"
+    name: "Huntington Ingalls Industries"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense, nuclear]
+    primary_bucket: defense
+    trends_keyword: "Huntington Ingalls submarine shipbuilding naval"
+
+  - ticker: "TXT"
+    name: "Textron"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense]
+    primary_bucket: defense
+    trends_keyword: "Textron Bell helicopter armored vehicle defense"
+
+  - ticker: "TDY"
+    name: "Teledyne Technologies"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense, ai_infra]
+    primary_bucket: defense
+    trends_keyword: "Teledyne defense sensors imaging instruments"
+
+  - ticker: "MRCY"
+    name: "Mercury Systems"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense, ai_infra]
+    primary_bucket: defense
+    trends_keyword: "Mercury Systems defense electronics processing"
+
+  - ticker: "PSN"
+    name: "Parsons Corporation"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense, ai_infra]
+    primary_bucket: defense
+    trends_keyword: "Parsons defense infrastructure cyber government"
+
+  - ticker: "CAE.TO"
+    name: "CAE Inc"
+    exchange: TSX
+    region: CA
+    currency: CAD
+    accounting_std: IFRS
+    buckets: [defense]
+    primary_bucket: defense
+    trends_keyword: "CAE flight simulation defense training"
+
+  # ────────────────────────────────────────────────
+  # WATER INFRASTRUCTURE (expansion)
+  # ────────────────────────────────────────────────
+  - ticker: "WTS"
+    name: "Watts Water Technologies"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [water]
+    primary_bucket: water
+    trends_keyword: "Watts Water flow control plumbing"
+
+  - ticker: "SBS"
+    name: "Sabesp"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [water]
+    primary_bucket: water
+    trends_keyword: "Sabesp water sanitation Brazil São Paulo"
+
+  # ────────────────────────────────────────────────
+  # CRITICAL MATERIALS (expansion)
+  # ────────────────────────────────────────────────
+  - ticker: "WPM"
+    name: "Wheaton Precious Metals"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [critical_materials]
+    primary_bucket: critical_materials
+    trends_keyword: "Wheaton silver gold streaming royalty"
+
+  - ticker: "SGML"
+    name: "Sigma Lithium"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [critical_materials]
+    primary_bucket: critical_materials
+    trends_keyword: "Sigma Lithium battery materials Brazil"
+
+  - ticker: "TGB"
+    name: "Taseko Mines"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [critical_materials]
+    primary_bucket: critical_materials
+    trends_keyword: "Taseko copper mining Canada Gibraltar"
+
+  - ticker: "KGHM.WA"
+    eodhd_ticker: "KGHM.WAR"
+    name: "KGHM Polska Miedź"
+    exchange: WSE
+    region: EU
+    currency: PLN
+    accounting_std: IFRS
+    buckets: [critical_materials]
+    primary_bucket: critical_materials
+    trends_keyword: "KGHM copper silver mining Poland"
+    isin: "PLKGHM000017"
+
+  # ────────────────────────────────────────────────
+  # AI PHYSICAL INFRASTRUCTURE (expansion)
+  # ────────────────────────────────────────────────
+  - ticker: "CRDO"
+    name: "Credo Technology"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra]
+    primary_bucket: ai_infra
+    trends_keyword: "Credo Technology high speed connectivity SerDes"
+
+  - ticker: "LSCC"
+    name: "Lattice Semiconductor"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra, defense]
+    primary_bucket: ai_infra
+    trends_keyword: "Lattice Semiconductor FPGA low power AI edge"
+
+  - ticker: "MTSI"
+    name: "MACOM Technology Solutions"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra, defense]
+    primary_bucket: ai_infra
+    trends_keyword: "MACOM RF microwave chip data center"
+
+  - ticker: "ALGM"
+    name: "Allegro MicroSystems"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra, grid]
+    primary_bucket: ai_infra
+    trends_keyword: "Allegro magnetic sensor power management EV"
+
+  - ticker: "ICHR"
+    name: "Ichor Holdings"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra]
+    primary_bucket: ai_infra
+    trends_keyword: "Ichor semiconductor gas delivery subsystems"
+
+  - ticker: "FORM"
+    name: "FormFactor"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra]
+    primary_bucket: ai_infra
+    trends_keyword: "FormFactor wafer probe semiconductor testing"
+
+  # ────────────────────────────────────────────────
+  # GRID & POWER INFRASTRUCTURE (major expansion)
+  # ────────────────────────────────────────────────
+  - ticker: "ENGI.PA"
+    eodhd_ticker: "ENGI.PA"
+    name: "Engie"
+    exchange: EURONEXT
+    region: EU
+    currency: EUR
+    accounting_std: IFRS
+    buckets: [grid, nuclear]
+    primary_bucket: grid
+    trends_keyword: "Engie energy grid France Europe"
+    isin: "FR0010208488"
+
+  - ticker: "EXC"
+    name: "Exelon"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [nuclear, grid]
+    primary_bucket: nuclear
+    trends_keyword: "Exelon nuclear power electricity"
+
+  - ticker: "SO"
+    name: "Southern Company"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [nuclear, grid]
+    primary_bucket: nuclear
+    trends_keyword: "Southern Company nuclear Vogtle utility"
+
+  - ticker: "AEP"
+    name: "American Electric Power"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "American Electric Power transmission grid"
+
+  - ticker: "XEL"
+    name: "Xcel Energy"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "Xcel Energy wind power grid"
+
+  - ticker: "DTE"
+    name: "DTE Energy"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "DTE Energy Michigan utility grid"
+
+  - ticker: "PPL"
+    name: "PPL Corporation"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "PPL electric utility transmission"
+
+  - ticker: "EIX"
+    name: "Edison International"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "Edison International California electric grid"
+
+  - ticker: "AME"
+    name: "AMETEK"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [grid, ai_infra]
+    primary_bucket: grid
+    trends_keyword: "AMETEK electronic instruments power management"
+
+  - ticker: "EDPR.LS"
+    eodhd_ticker: "EDPR.LS"
+    name: "EDP Renewables"
+    exchange: EURONEXT
+    region: EU
+    currency: EUR
+    accounting_std: IFRS
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "EDP Renewables wind solar offshore"
+    isin: "PTEDP0AM0009"
+
+  - ticker: "A2A.MI"
+    eodhd_ticker: "A2A.MI"
+    name: "A2A"
+    exchange: EURONEXT
+    region: EU
+    currency: EUR
+    accounting_std: IFRS
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "A2A multi-utility Italy electricity"
+    isin: "IT0001233417"
+
+  - ticker: "VERBUND.VI"
+    eodhd_ticker: "VERBUND.VI"
+    name: "Verbund"
+    exchange: WBAG
+    region: EU
+    currency: EUR
+    accounting_std: IFRS
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "Verbund hydropower Austria electricity"
+    isin: "AT0000746409"
+
+  - ticker: "FTS.TO"
+    name: "Fortis"
+    exchange: TSX
+    region: CA
+    currency: CAD
+    accounting_std: IFRS
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "Fortis electric utility transmission Canada"
+
+  - ticker: "H.TO"
+    name: "Hydro One"
+    exchange: TSX
+    region: CA
+    currency: CAD
+    accounting_std: IFRS
+    buckets: [grid]
+    primary_bucket: grid
+    trends_keyword: "Hydro One transmission Ontario electricity"
+
+  # ────────────────────────────────────────────────
+  # NUCLEAR ENERGY (major expansion)
+  # ────────────────────────────────────────────────
+  - ticker: "ETR"
+    name: "Entergy"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [nuclear, grid]
+    primary_bucket: nuclear
+    trends_keyword: "Entergy nuclear utility Gulf Coast"
+
+  - ticker: "D"
+    name: "Dominion Energy"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [nuclear, grid]
+    primary_bucket: nuclear
+    trends_keyword: "Dominion Energy nuclear Virginia grid"
+
+  - ticker: "NRG"
+    name: "NRG Energy"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [nuclear, grid]
+    primary_bucket: nuclear
+    trends_keyword: "NRG Energy power generation nuclear"
+
+  - ticker: "NXE"
+    name: "NexGen Energy"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [nuclear, critical_materials]
+    primary_bucket: nuclear
+    trends_keyword: "NexGen uranium Athabasca Basin Rook"
+
+  - ticker: "PDN.AX"
+    eodhd_ticker: "PDN.AU"
+    name: "Paladin Energy"
+    exchange: ASX
+    region: US
+    currency: USD
+    accounting_std: IFRS
+    buckets: [nuclear, critical_materials]
+    primary_bucket: nuclear
+    trends_keyword: "Paladin uranium Namibia mining"
+    isin: "AU000000PDN6"
+
+  # ────────────────────────────────────────────────
+  # DEFENSE (major expansion)
+  # ────────────────────────────────────────────────
+  - ticker: "ESLT"
+    name: "Elbit Systems"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense, ai_infra]
+    primary_bucket: defense
+    trends_keyword: "Elbit Systems defense electronics Israel"
+
+  - ticker: "AVAV"
+    name: "AeroVironment"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense, ai_infra]
+    primary_bucket: defense
+    trends_keyword: "AeroVironment drone UAV loitering munition"
+
+  - ticker: "AXON"
+    name: "Axon Enterprise"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense, ai_infra]
+    primary_bucket: defense
+    trends_keyword: "Axon Taser drone law enforcement defense"
+
+  - ticker: "CACI"
+    name: "CACI International"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense, ai_infra]
+    primary_bucket: defense
+    trends_keyword: "CACI defense IT intelligence government"
+
+  - ticker: "HWM"
+    name: "Howmet Aerospace"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense]
+    primary_bucket: defense
+    trends_keyword: "Howmet aerospace engine components defense"
+
+  - ticker: "MOG.A"
+    name: "Moog Inc"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense]
+    primary_bucket: defense
+    trends_keyword: "Moog precision motion control missile defense"
+
+  - ticker: "SRP.L"
+    eodhd_ticker: "SRP.LSE"
+    name: "Serco Group"
+    exchange: LSE
+    region: EU
+    currency: GBP
+    accounting_std: IFRS
+    buckets: [defense]
+    primary_bucket: defense
+    trends_keyword: "Serco defense services government UK"
+    isin: "GB0007973794"
+
+  - ticker: "MRO.L"
+    eodhd_ticker: "MRO.LSE"
+    name: "Melrose Industries"
+    exchange: LSE
+    region: EU
+    currency: GBP
+    accounting_std: IFRS
+    buckets: [defense]
+    primary_bucket: defense
+    trends_keyword: "Melrose GKN Aerospace defense components"
+    isin: "GB00BNGDN821"
+
+  - ticker: "DCO"
+    name: "Ducommun"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense]
+    primary_bucket: defense
+    trends_keyword: "Ducommun aerospace defense structures electronics"
+
+  - ticker: "VVX"
+    name: "V2X"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense]
+    primary_bucket: defense
+    trends_keyword: "V2X defense logistics sustainment services"
+
+  - ticker: "TGI"
+    name: "Triumph Group"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense]
+    primary_bucket: defense
+    trends_keyword: "Triumph aerospace structures defense components"
+
+  - ticker: "BA"
+    name: "Boeing"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [defense]
+    primary_bucket: defense
+    trends_keyword: "Boeing defense aircraft missile systems"
+
+  - ticker: "SPIRE.L"
+    eodhd_ticker: "SPR.LSE"
+    name: "Spirent Communications"
+    exchange: LSE
+    region: EU
+    currency: GBP
+    accounting_std: IFRS
+    buckets: [defense, ai_infra]
+    primary_bucket: defense
+    trends_keyword: "Spirent testing cyber defense network"
+    isin: "GB0007739692"
+
+  - ticker: "DKGR.DE"
+    eodhd_ticker: "DKGR.XETRA"
+    name: "Draegerwerk"
+    exchange: XETRA
+    region: EU
+    currency: EUR
+    accounting_std: IFRS
+    buckets: [defense]
+    primary_bucket: defense
+    trends_keyword: "Draeger CBRN defense safety protection"
+    isin: "DE0005550602"
+
+  # ────────────────────────────────────────────────
+  # WATER INFRASTRUCTURE (major expansion)
+  # ────────────────────────────────────────────────
+  - ticker: "CWCO"
+    name: "Consolidated Water"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [water]
+    primary_bucket: water
+    trends_keyword: "Consolidated Water desalination Caribbean"
+
+  - ticker: "YORW"
+    name: "York Water"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [water]
+    primary_bucket: water
+    trends_keyword: "York Water utility Pennsylvania"
+
+  - ticker: "CWT"
+    name: "California Water Service"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [water]
+    primary_bucket: water
+    trends_keyword: "California Water Service utility"
+
+  - ticker: "ARTNA"
+    name: "Artesian Resources"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [water]
+    primary_bucket: water
+    trends_keyword: "Artesian water utility Delaware"
+
+  - ticker: "IEX"
+    name: "IDEX Corporation"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [water, ai_infra]
+    primary_bucket: water
+    trends_keyword: "IDEX pump flow control water"
+
+  - ticker: "ZWS"
+    name: "Zurn Elkay Water Solutions"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [water]
+    primary_bucket: water
+    trends_keyword: "Zurn Elkay water flow control building"
+
+  - ticker: "FLR"
+    name: "Fluor Corporation"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [water, grid]
+    primary_bucket: water
+    trends_keyword: "Fluor engineering construction water infrastructure"
+
+  # ────────────────────────────────────────────────
+  # CRITICAL MATERIALS (major expansion)
+  # ────────────────────────────────────────────────
+  - ticker: "FNV"
+    name: "Franco-Nevada"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [critical_materials]
+    primary_bucket: critical_materials
+    trends_keyword: "Franco-Nevada gold silver royalty streaming"
+
+  - ticker: "RGLD"
+    name: "Royal Gold"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [critical_materials]
+    primary_bucket: critical_materials
+    trends_keyword: "Royal Gold royalty streaming precious metals"
+
+  - ticker: "PAAS"
+    name: "Pan American Silver"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [critical_materials]
+    primary_bucket: critical_materials
+    trends_keyword: "Pan American Silver mining Latin America"
+
+  - ticker: "PLL"
+    name: "Piedmont Lithium"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [critical_materials]
+    primary_bucket: critical_materials
+    trends_keyword: "Piedmont Lithium North Carolina EV battery"
+
+  - ticker: "MTRN"
+    name: "Materion"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [critical_materials, defense]
+    primary_bucket: critical_materials
+    trends_keyword: "Materion beryllium specialty metals defense"
+
+  - ticker: "NMG"
+    name: "Nouveau Monde Graphite"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [critical_materials]
+    primary_bucket: critical_materials
+    trends_keyword: "Nouveau Monde graphite anode battery Quebec"
+
+  - ticker: "NEO.TO"
+    name: "Neo Performance Materials"
+    exchange: TSX
+    region: CA
+    currency: CAD
+    accounting_std: IFRS
+    buckets: [critical_materials]
+    primary_bucket: critical_materials
+    trends_keyword: "Neo Performance rare earth magnets"
+
+  - ticker: "SLI"
+    name: "Standard Lithium"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [critical_materials]
+    primary_bucket: critical_materials
+    trends_keyword: "Standard Lithium DLE Arkansas brine"
+
+  - ticker: "HAYN"
+    name: "Haynes International"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [critical_materials, defense]
+    primary_bucket: critical_materials
+    trends_keyword: "Haynes nickel cobalt superalloy aerospace"
+
+  - ticker: "BHP"
+    name: "BHP Group"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: IFRS
+    buckets: [critical_materials]
+    primary_bucket: critical_materials
+    trends_keyword: "BHP copper iron ore nickel mining"
+
+  - ticker: "MT"
+    name: "ArcelorMittal"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: IFRS
+    buckets: [critical_materials]
+    primary_bucket: critical_materials
+    trends_keyword: "ArcelorMittal steel grid infrastructure"
+
+  - ticker: "URG"
+    name: "Ur-Energy"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [nuclear, critical_materials]
+    primary_bucket: nuclear
+    trends_keyword: "Ur-Energy uranium mining Wyoming in-situ"
+
+  # ────────────────────────────────────────────────
+  # AI PHYSICAL INFRASTRUCTURE (major expansion)
+  # ────────────────────────────────────────────────
+  - ticker: "TSM"
+    name: "Taiwan Semiconductor Manufacturing"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra]
+    primary_bucket: ai_infra
+    trends_keyword: "TSMC semiconductor foundry AI chip"
+
+  - ticker: "ARM"
+    name: "Arm Holdings"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra]
+    primary_bucket: ai_infra
+    trends_keyword: "Arm chip IP AI mobile data center"
+
+  - ticker: "ALAB"
+    name: "Astera Labs"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra]
+    primary_bucket: ai_infra
+    trends_keyword: "Astera Labs PCIe CXL connectivity AI"
+
+  - ticker: "LITE"
+    name: "Lumentum Holdings"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra, defense]
+    primary_bucket: ai_infra
+    trends_keyword: "Lumentum optical components laser data center"
+
+  - ticker: "IPGP"
+    name: "IPG Photonics"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra, defense]
+    primary_bucket: ai_infra
+    trends_keyword: "IPG Photonics fiber laser industrial defense"
+
+  - ticker: "RMBS"
+    name: "Rambus"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra]
+    primary_bucket: ai_infra
+    trends_keyword: "Rambus memory interface security chip IP"
+
+  - ticker: "AMAT"
+    name: "Applied Materials"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra]
+    primary_bucket: ai_infra
+    trends_keyword: "Applied Materials semiconductor equipment deposition"
+
+  - ticker: "LRCX"
+    name: "Lam Research"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra]
+    primary_bucket: ai_infra
+    trends_keyword: "Lam Research etch deposition semiconductor"
+
+  - ticker: "TER"
+    name: "Teradyne"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra, defense]
+    primary_bucket: ai_infra
+    trends_keyword: "Teradyne semiconductor test robotics"
+
+  - ticker: "NXPI"
+    name: "NXP Semiconductors"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra, grid]
+    primary_bucket: ai_infra
+    trends_keyword: "NXP semiconductor automotive IoT edge AI"
+
+  - ticker: "CLS"
+    name: "Celestica"
+    exchange: NYSE
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra]
+    primary_bucket: ai_infra
+    trends_keyword: "Celestica AI server rack manufacturing"
+
+  - ticker: "AMKR"
+    name: "Amkor Technology"
+    exchange: NASDAQ
+    region: US
+    currency: USD
+    accounting_std: GAAP
+    buckets: [ai_infra]
+    primary_bucket: ai_infra
+    trends_keyword: "Amkor chip packaging advanced OSAT"

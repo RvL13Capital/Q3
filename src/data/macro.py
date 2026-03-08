@@ -144,6 +144,28 @@ def fetch_ecb_series(
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _is_macro_series_stale(conn, series_id: str, staleness_days: int) -> bool:
+    """Check staleness for a specific macro series_id (not the whole table)."""
+    from datetime import datetime, timedelta
+    try:
+        result = conn.execute(
+            "SELECT MAX(fetched_at) FROM macro_series WHERE series_id = ?",
+            [series_id],
+        ).fetchone()
+        if not result or result[0] is None:
+            return True
+        last_fetch = result[0]
+        if isinstance(last_fetch, str):
+            last_fetch = datetime.fromisoformat(last_fetch)
+        return last_fetch < datetime.now() - timedelta(days=staleness_days)
+    except Exception:
+        return True
+
+
+# ---------------------------------------------------------------------------
 # Main update function
 # ---------------------------------------------------------------------------
 
@@ -165,7 +187,7 @@ def update_macro(
     # ── US / CA series via FRED ──────────────────────────────────────────────
     if fred_api_key:
         for our_name, fred_id in FRED_SERIES.items():
-            if not force_refresh and not is_stale(conn, "macro_series", None, staleness):
+            if not force_refresh and not _is_macro_series_stale(conn, our_name, staleness):
                 logger.info(f"Macro {our_name} is fresh, skipping")
                 continue
             df = fetch_fred_series(fred_id, fred_api_key, start_date)
@@ -182,7 +204,7 @@ def update_macro(
 
     # ── EU series via ECB SDW ────────────────────────────────────────────────
     for our_name, ecb_key in ECB_SERIES.items():
-        if not force_refresh and not is_stale(conn, "macro_series", None, staleness):
+        if not force_refresh and not _is_macro_series_stale(conn, our_name, staleness):
             continue
         df = fetch_ecb_series(ecb_key, start_date)
         if df.empty:

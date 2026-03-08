@@ -275,20 +275,21 @@ def update_prices(
         logger.info(f"Fetching {len(group_tickers)} tickers from {start}")
         df = fetch_prices_yfinance(group_tickers, start, today)
 
-        if df.empty and eodhd_api_key:
-            # Fallback: only EU tickers with eodhd mapping
-            eu_tickers = [
+        # Per-ticker EODHD fallback: retry any ticker that got zero rows from yfinance
+        if eodhd_api_key:
+            fetched_tickers = set(df["ticker"].unique()) if not df.empty else set()
+            missing = [
                 t for t in group_tickers
-                if t in eodhd_map
-                and (
-                    len(universe_df[universe_df["ticker"] == t]) > 0
-                    and universe_df[universe_df["ticker"] == t]["region"].values[0] == "EU"
-                )
+                if t not in fetched_tickers and t in eodhd_map
             ]
-            if eu_tickers:
-                eodhd_input = {t: eodhd_map[t] for t in eu_tickers}
-                df = fetch_prices_eodhd(eodhd_input, start, today, eodhd_api_key,
-                                        api_keys=eodhd_api_keys)
+            if missing:
+                eodhd_input = {t: eodhd_map[t] for t in missing}
+                fallback_df = fetch_prices_eodhd(
+                    eodhd_input, start, today, eodhd_api_key,
+                    api_keys=eodhd_api_keys,
+                )
+                if not fallback_df.empty:
+                    df = pd.concat([df, fallback_df], ignore_index=True) if not df.empty else fallback_df
 
         if df.empty:
             for t in group_tickers:
