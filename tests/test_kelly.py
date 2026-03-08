@@ -18,7 +18,7 @@ from src.portfolio.construction import apply_constraints
 
 def test_kelly_basic():
     """μ=0.15, σ=0.30, rf=0.04 → f* = 0.25*(0.15-0.04)/0.09 ≈ 0.306"""
-    f = kelly_fraction(mu=0.15, sigma=0.30, rf=0.04, fraction=0.25)
+    f, _ = kelly_fraction(mu=0.15, sigma=0.30, rf=0.04, fraction=0.25)
     expected = 0.25 * (0.15 - 0.04) / (0.30 ** 2)
     assert f == pytest.approx(expected, abs=1e-6)
     assert 0 < f < 1
@@ -26,33 +26,39 @@ def test_kelly_basic():
 
 def test_kelly_zero_excess_return():
     """When μ == rf, f* = 0."""
-    f = kelly_fraction(mu=0.04, sigma=0.25, rf=0.04, fraction=0.25)
+    f, _ = kelly_fraction(mu=0.04, sigma=0.25, rf=0.04, fraction=0.25)
     assert f == 0.0
 
 
 def test_kelly_negative_excess_return():
     """When μ < rf, f* = 0 (no short selling)."""
-    f = kelly_fraction(mu=0.02, sigma=0.25, rf=0.04, fraction=0.25)
+    f, _ = kelly_fraction(mu=0.02, sigma=0.25, rf=0.04, fraction=0.25)
     assert f == 0.0
 
 
 def test_kelly_clamped_high():
     """Extreme signal → raw Kelly > 1 → clamped to 1.0."""
-    f = kelly_fraction(mu=0.50, sigma=0.10, rf=0.04, fraction=0.25)
+    f, _ = kelly_fraction(mu=0.50, sigma=0.10, rf=0.04, fraction=0.25)
     assert f == 1.0
 
 
 def test_kelly_zero_sigma():
     """σ = 0 → return 0 (avoid division by zero)."""
-    f = kelly_fraction(mu=0.15, sigma=0.0, rf=0.04, fraction=0.25)
+    f, _ = kelly_fraction(mu=0.15, sigma=0.0, rf=0.04, fraction=0.25)
     assert f == 0.0
 
 
 def test_kelly_full_fraction():
     """fraction=1.0 should give 4x the 0.25 fraction result."""
-    f1 = kelly_fraction(mu=0.15, sigma=0.30, rf=0.04, fraction=0.25)
-    f4 = kelly_fraction(mu=0.15, sigma=0.30, rf=0.04, fraction=1.0)
+    f1, _ = kelly_fraction(mu=0.15, sigma=0.30, rf=0.04, fraction=0.25)
+    f4, _ = kelly_fraction(mu=0.15, sigma=0.30, rf=0.04, fraction=1.0)
     assert f4 == pytest.approx(min(1.0, 4 * f1), abs=1e-6)
+
+
+def test_kelly_raw_gte_25pct():
+    """kelly_raw (full Kelly) must be >= kelly_25pct (fraction-scaled) when fraction < 1."""
+    f_adj, f_full = kelly_fraction(mu=0.15, sigma=0.30, rf=0.04, fraction=0.25)
+    assert f_full >= f_adj - 1e-9  # full Kelly >= fractioned
 
 
 # ────────────────────────────────────────────────────────────────────────────

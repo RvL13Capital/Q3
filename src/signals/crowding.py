@@ -2,13 +2,19 @@
 Signal 3: Crowding Score (X_C) — Critical Slowing Down Index
 
 EARKE eq 6:
-  X_C,t = clamp(ω₁·Δρ₁(t) + ω₂·Δ(λ_max / Σλ))
+  X_C,t = clamp(ω₁·Δρ₁(t) + ω₂·Δ(λ_max / Σλ) [+ ω₃·trends_score])
 
-Two sub-components:
+Two required sub-components:
   1. Δρ₁ — change in lag-1 autocorrelation of stock returns.
      Rising autocorrelation = returns becoming mean-avoiding = CSD signal.
   2. Δ(λ_max/Σλ) — change in absorption ratio from PCA of universe return
      correlation matrix. Rising = stocks moving in sync = systemic crowding.
+
+Optional third component (when Google Trends data is present in DB):
+  3. trends_score — normalised ratio of recent-to-baseline search interest.
+     Rising public attention above its own 90-day average = crowding proxy.
+     Weight ω₃ (params.signals.crowding.csd_omega3, default 0.20) is only
+     applied when trends data is found; weights renormalise to 1.0 otherwise.
 
 High X_C = crowded / pre-crash regime = BAD for new entries.
 The composite formula inverts this: (1 - X_C) contributes to the final score.
@@ -139,6 +145,57 @@ def compute_absorption_ratio(
 
 
 # ---------------------------------------------------------------------------
+# Google Trends crowding sub-score (optional third component)
+# ---------------------------------------------------------------------------
+
+def _get_trends_crowding_score(
+    conn,
+    keyword: str,
+    as_of_date: str,
+    params: dict,
+) -> tuple[float, float]:
+    """
+    Compute a crowding proxy from Google Trends search interest.
+
+    Returns (trend_score, confidence) both in [0, 1].
+
+    trend_score > 0.5 means recent search interest is above its own 90-day
+    baseline, signalling growing public attention → potential crowding.
+
+    Normalization: maps the ratio (recent_30d / baseline_90d) from [0.5, 2.0]
+    linearly onto [0, 1], so a 2× spike yields trend_score = 1.0.
+    """
+    from src.data.db import get_trends
+
+    w = params["signals"]["crowding"]
+    recent_days   = int(w.get("trends_window_recent",   30))
+    baseline_days = int(w.get("trends_window_baseline", 90))
+
+    end   = as_of_date
+    start = (datetime.strptime(as_of_date, "%Y-%m-%d")
+             - timedelta(days=baseline_days)).strftime("%Y-%m-%d")
+
+    try:
+        series = get_trends(conn, keyword, start, end)
+    except Exception:
+        return 0.0, 0.0
+
+    if series.empty or len(series) < 7:
+        return 0.0, 0.0
+
+    baseline_score = float(series.mean())
+    if baseline_score < 1.0:
+        return 0.0, 0.0
+
+    recent_score = float(series.tail(recent_days).mean())
+    # ratio in [0.5, 2.0] → trend_score in [0, 1]
+    ratio       = recent_score / baseline_score
+    trend_score = max(0.0, min(1.0, (ratio - 0.5) / 1.5))
+    confidence  = min(1.0, len(series) / baseline_days)
+    return round(trend_score, 4), round(confidence, 4)
+
+
+# ---------------------------------------------------------------------------
 # Composite crowding score (CSD formula, eq 6)
 # ---------------------------------------------------------------------------
 
@@ -149,16 +206,21 @@ def compute_crowding_score(
     as_of_date: str,
     absorption_delta: float = 0.0,
     absorption_conf: float = 0.0,
+    trends_keyword: Optional[str] = None,
 ) -> dict:
     """
-    X_C,t = clamp(ω₁·Δρ₁ + ω₂·Δ(λ_max/Σλ))
+    X_C,t = clamp(ω₁·Δρ₁ + ω₂·Δ(λ_max/Σλ) [+ ω₃·trends_score])
 
     absorption_delta / absorption_conf are pre-computed universe-level values
     passed in from batch_crowding_scores to avoid redundant fetches.
+
+    trends_keyword: if provided and DB has Trends data, adds a third component
+    weighted by csd_omega3 (params).  All weights are renormalised to sum 1.0.
     """
     w      = params["signals"]["crowding"]
     omega1 = w.get("csd_omega1", 0.5)
     omega2 = w.get("csd_omega2", 0.5)
+    omega3 = w.get("csd_omega3", 0.20)
 
     _, _, autocorr_delta, autocorr_conf = compute_lag1_autocorr(
         ticker, conn, params, as_of_date
@@ -170,12 +232,35 @@ def compute_crowding_score(
     # Δ(λ_max/Σλ) typical range [-0.10, +0.10]: rising absorption → score near 1.0
     absorption_score = max(0.0, min(1.0, (absorption_delta + 0.10) / 0.20))
 
-    crowding_score = max(0.0, min(1.0, omega1 * autocorr_score + omega2 * absorption_score))
+    # Optional Google Trends third component
+    trend_score, trend_conf = 0.0, 0.0
+    if trends_keyword and conn is not None:
+        try:
+            trend_score, trend_conf = _get_trends_crowding_score(
+                conn, trends_keyword, as_of_date, params
+            )
+        except Exception as e:
+            logger.debug(f"Trends score unavailable for {ticker}: {e}")
 
-    if absorption_conf > 0:
-        crowding_conf = (autocorr_conf + absorption_conf) / 2.0
+    if trend_conf > 0:
+        # Three-component formula: renormalise weights to sum 1.0
+        w_sum         = omega1 + omega2 + omega3
+        crowding_score = max(0.0, min(1.0, (
+            omega1 * autocorr_score
+            + omega2 * absorption_score
+            + omega3 * trend_score
+        ) / w_sum))
+        if absorption_conf > 0:
+            crowding_conf = (autocorr_conf + absorption_conf + trend_conf) / 3.0
+        else:
+            crowding_conf = (autocorr_conf * 0.70 + trend_conf) / 2.0
     else:
-        crowding_conf = autocorr_conf * 0.70  # penalise when no universe-level data
+        # Two-component fallback (original behaviour, omega1+omega2 already = 1.0)
+        crowding_score = max(0.0, min(1.0, omega1 * autocorr_score + omega2 * absorption_score))
+        if absorption_conf > 0:
+            crowding_conf = (autocorr_conf + absorption_conf) / 2.0
+        else:
+            crowding_conf = autocorr_conf * 0.70  # penalise when no universe-level data
 
     return {
         "ticker":              ticker,
@@ -183,6 +268,7 @@ def compute_crowding_score(
         "crowding_confidence": round(crowding_conf, 4),
         "autocorr_delta":      round(autocorr_delta, 4),
         "absorption_delta":    round(absorption_delta, 4),
+        "trends_score":        round(trend_score, 4),
     }
 
 
@@ -205,7 +291,7 @@ def batch_crowding_scores(
     if not all_tickers:
         return pd.DataFrame(columns=[
             "ticker", "crowding_score", "crowding_confidence",
-            "autocorr_delta", "absorption_delta",
+            "autocorr_delta", "absorption_delta", "trends_score",
         ])
 
     logger.info(f"Computing absorption ratio for {len(all_tickers)} tickers")
@@ -222,6 +308,7 @@ def batch_crowding_scores(
             stock["ticker"], conn, params, as_of_date,
             absorption_delta=absorption_delta,
             absorption_conf=absorption_conf,
+            trends_keyword=stock.get("trends_keyword"),
         )
         rows.append(result)
 

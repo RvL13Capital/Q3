@@ -34,11 +34,12 @@ def apply_constraints(kelly_df: pd.DataFrame, params: dict) -> pd.DataFrame:
         return pd.DataFrame(columns=["ticker", "weight", "primary_bucket", "is_constrained"])
 
     p = params["kelly"]
-    min_pos     = p["min_position"]
-    max_pos     = p["max_position"]
-    max_bucket  = p["max_bucket"]
-    cash_floor  = p["cash_reserve"]
+    min_pos      = p["min_position"]
+    max_pos      = p["max_position"]
+    max_bucket   = p["max_bucket"]
+    cash_floor   = p["cash_reserve"]
     max_invested = 1.0 - cash_floor
+    aum          = float(p.get("aum_eur", 0))
 
     df = kelly_df.copy()
     df["weight"] = df["kelly_25pct"].clip(lower=0.0)
@@ -62,6 +63,19 @@ def apply_constraints(kelly_df: pd.DataFrame, params: dict) -> pd.DataFrame:
     if over_cap.any():
         df.loc[over_cap, "weight"] = max_pos
         df.loc[over_cap, "is_constrained"] = True
+
+    # ── Step 3.5: AUM capacity ceiling (eq 12 w_max) ─────────────────────────
+    # When AUM is configured and w_max_eur is available, cap each position to
+    # avoid exceeding the market-impact break-even threshold.
+    if aum > 0 and "w_max_eur" in df.columns:
+        valid = df["w_max_eur"].notna() & (df["w_max_eur"] > 0)
+        if valid.any():
+            w_max_fracs = (df.loc[valid, "w_max_eur"] / aum).clip(upper=max_pos)
+            over_wmax = valid & (df["weight"] > w_max_fracs)
+            if over_wmax.any():
+                df.loc[over_wmax, "weight"] = w_max_fracs[over_wmax]
+                df.loc[over_wmax, "is_constrained"] = True
+                logger.debug(f"w_max AUM cap applied to {over_wmax.sum()} position(s)")
 
     # ── Step 4: Cash floor ────────────────────────────────────────────────────
     total = df["weight"].sum()

@@ -140,15 +140,19 @@ def kelly_fraction(
     aum: float = 0.0,
     daily_dollar_volume: float = 0.0,
     impact_scaling: float = 1.0,
-) -> float:
+) -> tuple[float, float]:
     """
     Optimise the Kelly objective with market impact penalty.
+
+    Returns (f_adjusted, f_full) where:
+      f_full     = unconstrained optimizer solution (full Kelly, pre-fraction)
+      f_adjusted = fraction × f_full, clamped to [0, 1]
 
     When daily_dollar_volume == 0 or aum == 0, degrades gracefully to the
     classic fractional Kelly: fraction × (μ−rf) / σ².
     """
     if sigma <= 0 or mu <= rf:
-        return 0.0
+        return 0.0, 0.0
 
     # Impact term weight √(W/V); 0 when either unknown
     if daily_dollar_volume > 0 and aum > 0:
@@ -158,8 +162,9 @@ def kelly_fraction(
 
     if sqrt_wv < 1e-8:
         # No impact data — fall back to classical fractional Kelly
-        raw = fraction * (mu - rf) / (sigma ** 2)
-        return float(max(0.0, min(1.0, raw)))
+        f_full     = (mu - rf) / (sigma ** 2)
+        f_adjusted = float(max(0.0, min(1.0, fraction * f_full)))
+        return f_adjusted, f_full
 
     mu_robust = mu - rf  # excess return
 
@@ -174,9 +179,10 @@ def kelly_fraction(
     # when impact is negligible.
     upper = min(4.0, 1.0 / max(fraction, 0.05))  # cap at 4× full Kelly
     result = minimize_scalar(neg_objective, bounds=(0.0, upper), method="bounded")
-    f_full = float(result.x) if result.success else mu_robust / sigma ** 2
+    f_full     = float(result.x) if result.success else mu_robust / sigma ** 2
+    f_adjusted = float(max(0.0, min(1.0, fraction * f_full)))
 
-    return float(max(0.0, min(1.0, fraction * f_full)))
+    return f_adjusted, f_full
 
 
 # ---------------------------------------------------------------------------
@@ -253,12 +259,19 @@ def compute_kelly_weights(
         f_old              = get_last_kelly_fraction(conn, ticker)
         daily_vol          = estimate_daily_dollar_volume(ticker, conn, as_of_date)
 
-        f = kelly_fraction(
+        f_adjusted, f_full = kelly_fraction(
             mu=mu, sigma=sigma, rf=rf, fraction=frac,
             f_old=f_old, aum=aum,
             daily_dollar_volume=daily_vol,
             impact_scaling=impact_scaling,
         )
+
+        # σ_epist proxy: discount kelly by composite_confidence.
+        # Low confidence (sparse data) → smaller position.  confidence=1.0 → no change.
+        comp_conf = row.get("composite_confidence", 1.0)
+        if pd.isna(comp_conf) or comp_conf <= 0:
+            comp_conf = 1.0
+        f_epist = max(0.0, f_adjusted * comp_conf)
 
         w_max = compute_w_max(
             mu_robust=max(0.0, mu - rf),
@@ -273,11 +286,12 @@ def compute_kelly_weights(
             "mu_estimate":     round(mu, 4),
             "sigma_estimate":  round(sigma, 4),
             "rf_rate":         round(rf, 4),
-            "kelly_raw":       round(f, 4),
-            "kelly_25pct":     round(f, 4),
+            "kelly_raw":       round(f_full, 4),   # full Kelly before fraction & epist
+            "kelly_25pct":     round(f_epist, 4),  # fraction-scaled + epist-discounted
             "w_max_eur":       round(w_max, 0) if w_max > 0 else None,
             "primary_bucket":  bucket,
             "composite_score": row.get("composite_score"),
+            "composite_confidence": round(comp_conf, 4),
             "sigma_valid":     sigma_valid,
         })
 

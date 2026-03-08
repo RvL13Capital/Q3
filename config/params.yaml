@@ -18,12 +18,17 @@ signals:
   composite_decay_pct: 0.20     # exit if composite decays > 20% from entry value
 
   crowding:
-    # CSD (Critical Slowing Down) parameters — eq 6: X_C = clamp(ω₁·Δρ₁ + ω₂·Δ(λ_max/Σλ))
+    # CSD (Critical Slowing Down) parameters — eq 6: X_C = clamp(ω₁·Δρ₁ + ω₂·Δ(λ_max/Σλ) [+ ω₃·trends])
     autocorr_window: 30          # rolling days for current lag-1 autocorrelation
     autocorr_baseline: 120       # days for baseline autocorrelation (delta reference)
     absorption_window: 60        # days for correlation matrix eigenvalue computation
     csd_omega1: 0.5              # weight for Δρ₁ (lag-1 autocorr delta)
     csd_omega2: 0.5              # weight for Δ(λ_max/Σλ) (absorption ratio delta)
+    # Google Trends third component — only applied when trends data is present in DB.
+    # When absent the two-component formula above is used unchanged (omega1/omega2 renorm to 1.0).
+    csd_omega3: 0.20             # weight for Google Trends crowding proxy
+    trends_window_recent: 30     # trailing days for "current" Trends average
+    trends_window_baseline: 90   # trailing days for baseline Trends comparison
 
   quality:
     roic_wacc_spread_min: 0.0    # hard gate: ROIC ≤ WACC → X_P = 0
