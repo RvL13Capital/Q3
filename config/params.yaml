@@ -27,9 +27,16 @@ signals:
     roic_wacc_spread_max: +0.20  # normalized to 1 above this
     margin_snr_min: 2.0
     margin_snr_max: 10.0
-    convexity_min: -0.05
-    convexity_max: +0.10
+    # ∂GM/∂PPI: OLS slope of annual Δgross_margin vs annual PPI (both decimal)
+    # e.g. +0.5 → each 1pp PPI rise → 0.5pp margin expansion (anti-fragile)
+    convexity_min: -0.50
+    convexity_max: +0.50
     lookback_years: 5
+
+physical:
+  # EROEI logistic damper (eq 4): X_E = 1 / (1 + exp(κ · (ECS − ECS_crit)))
+  # κ = steepness of the sigmoid (from Julia prototype)
+  eroei_kappa: 50.0
 
 return_estimation:
   equity_risk_premium: 0.05   # added on top of regional risk-free rate for WACC
