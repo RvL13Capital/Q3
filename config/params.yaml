@@ -4,6 +4,9 @@ kelly:
   max_bucket: 0.35        # 35% hard cap per megatrend bucket
   min_position: 0.02      # skip if Kelly weight < 2%
   cash_reserve: 0.10      # always keep at least 10% cash
+  # Market impact parameters (eq 12: c · σ · |f−f_old|^1.5 · √(W/V))
+  aum_eur: 50_000_000     # current AUM in EUR — set to actual fund size
+  impact_scaling: 1.0     # universal impact constant c ≈ 1.0 (Bouchaud et al.)
 
 signals:
   # Composite formula is multiplicative: X_E × X_P × (1 - X_C)
@@ -34,9 +37,13 @@ signals:
     lookback_years: 5
 
 physical:
-  # EROEI logistic damper (eq 4): X_E = 1 / (1 + exp(κ · (ECS − ECS_crit)))
-  # κ = steepness of the sigmoid (from Julia prototype)
-  eroei_kappa: 50.0
+  # EROEI logistic damper (eq 4): X_E = 1 / (1 + exp(κ · (ECS_proxy − ECS_crit)))
+  # ECS_proxy = percentile rank of FRED PPIENG over trailing lookback window [0, 1]
+  # κ = 10.0 calibrated for 0–1 percentile scale (spec uses 50 for raw ECS %)
+  eroei_kappa: 10.0
+  ecs_crit_percentile: 0.70    # 70th pct = structural energy cost headwind
+  ecs_lookback_months: 60      # 5-year rolling window for percentile
+  us_energy_ppi_series: "US_PPIENG"  # FRED PPIENG level index
 
 return_estimation:
   equity_risk_premium: 0.05   # added on top of regional risk-free rate for WACC

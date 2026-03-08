@@ -137,7 +137,7 @@ def run_weekly_scoring(
 
     logger.info(f"Running weekly scoring for {len(universe_df)} stocks ({as_of_date})")
 
-    physical_df = batch_physical_scores(universe_df)
+    physical_df = batch_physical_scores(universe_df, conn=conn, params=params, as_of_date=as_of_date)
     quality_df  = batch_quality_scores(universe_df, conn, params, as_of_date)
     crowding_df = batch_crowding_scores(universe_df, conn, params, as_of_date)
 
