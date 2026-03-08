@@ -1,11 +1,17 @@
 """
-Integration tests for the crowding signal (Signal 3).
+Integration tests for the crowding signal (Signal 3 — CSD approach).
 
-Uses in-memory DuckDB with synthetic price data; no network calls.
+Tests use in-memory DuckDB with synthetic price data; no network calls.
+
+The CSD crowding score has two sub-components:
+  1. Δρ₁  — change in lag-1 autocorrelation of stock returns
+  2. Δ(λ_max/Σλ) — change in absorption ratio (universe-level)
 """
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -13,335 +19,179 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.data.db import upsert_prices
 from src.signals.crowding import (
-    compute_etf_correlation,
-    compute_relative_strength,
-    compute_trends_score,
-    compute_short_interest_score,
+    compute_lag1_autocorr,
+    compute_absorption_ratio,
     compute_crowding_score,
     batch_crowding_scores,
 )
 
-AS_OF = "2023-01-13"   # last date inside our 400-day synthetic price window
+AS_OF = "2023-01-13"   # last date inside the 400-day synthetic window
 
 
 # ---------------------------------------------------------------------------
-# ETF correlation
+# Helpers
 # ---------------------------------------------------------------------------
 
-def test_etf_correlation_returns_valid(conn, prices_etn, prices_spy, params):
-    """With sufficient price history the score must be in [0, 1]."""
-    upsert_prices(conn, prices_etn)
-    upsert_prices(conn, prices_spy)
-    score, conf = compute_etf_correlation("ETN", "SPY", conn, params, AS_OF)
-    assert 0.0 <= score <= 1.0
-    assert conf > 0.5, "400 days of data should give high confidence"
-
-
-def test_etf_correlation_high_for_identical_returns(conn, prices_etn, params):
-    """Two series with identical returns should yield correlation ≈ 1 → score ≈ 1."""
-    # Insert ETN twice under different tickers → returns are identical
-    etf = prices_etn.copy()
-    etf["ticker"] = "ETN_ETF"
-    upsert_prices(conn, prices_etn)
-    upsert_prices(conn, etf)
-    score, conf = compute_etf_correlation("ETN", "ETN_ETF", conn, params, AS_OF)
-    assert score == pytest.approx(1.0, abs=0.01)
-
-
-def test_etf_correlation_missing_stock(conn, prices_etn, params):
-    """Missing stock data → neutral (0.5) with zero confidence."""
-    upsert_prices(conn, prices_etn)
-    score, conf = compute_etf_correlation("MISSING", "ETN", conn, params, AS_OF)
-    assert score == 0.5
-    assert conf == 0.0
-
-
-def test_etf_correlation_missing_etf(conn, prices_etn, params):
-    upsert_prices(conn, prices_etn)
-    score, conf = compute_etf_correlation("ETN", "MISSING_ETF", conn, params, AS_OF)
-    assert score == 0.5
-    assert conf == 0.0
-
-
-def test_etf_correlation_no_sector_etf(conn, prices_etn, params):
-    """If sector_etf is None (no mapping), caller handles it; signal = 0.5."""
-    # batch_crowding_scores passes None when no ETF is mapped; tested via
-    # compute_crowding_score with sector_etf=None
-    upsert_prices(conn, prices_etn)
-    result = compute_crowding_score(
-        "ETN", None, None, "SPY", conn, params, AS_OF, "US"
-    )
-    # With no ETF and no trends and no short data, only RS can contribute
-    assert 0.0 <= result["crowding_score"] <= 1.0
-
-
-def test_etf_correlation_low_data(conn, prices_etn, params):
-    """< 20 days of data → confidence below 1."""
-    small = prices_etn.head(15)
-    etf = small.copy()
-    etf["ticker"] = "ETN_ETF"
-    upsert_prices(conn, small)
-    upsert_prices(conn, etf)
-    as_of = str(small["date"].max()) if not hasattr(small["date"].iloc[0], "isoformat") \
-        else small["date"].max().isoformat()
-    score, conf = compute_etf_correlation("ETN", "ETN_ETF", conn, params, as_of)
-    assert conf < 1.0
-
-
-# ---------------------------------------------------------------------------
-# Relative strength
-# ---------------------------------------------------------------------------
-
-def test_relative_strength_same_asset(conn, prices_etn, params):
-    """Stock returns equal to market → RS = 1.0 → score in neutral zone."""
-    # Use ETN prices for both ticker and index (different DB tickers, same data)
-    idx = prices_etn.copy()
-    idx["ticker"] = "SPY"
-    upsert_prices(conn, prices_etn)
-    upsert_prices(conn, idx)
-    score, conf = compute_relative_strength("ETN", "SPY", conn, params, AS_OF)
-    # RS = 1.0 → (1.0 - 0.5) / 2.5 = 0.2
-    assert score == pytest.approx(0.2, abs=0.05)
-    assert conf > 0
-
-
-def test_relative_strength_outperformance(conn, prices_etn, prices_spy, params):
+def _make_prices(ticker: str, n_days: int = 400, start_price: float = 100.0,
+                 vol: float = 0.015, currency: str = "USD",
+                 autocorr: float = 0.0) -> pd.DataFrame:
     """
-    If the stock strongly outperforms SPY, RS > 1 and score > neutral.
-    Our 2% vol stock vs 1% vol SPY won't reliably outperform, so just check bounds.
+    Synthetic OHLCV prices.  autocorr > 0 → AR(1) trending process.
     """
-    upsert_prices(conn, prices_etn)
-    upsert_prices(conn, prices_spy)
-    score, conf = compute_relative_strength("ETN", "SPY", conn, params, AS_OF)
-    assert 0.0 <= score <= 1.0
-    assert conf > 0
+    rng = np.random.default_rng(seed=abs(hash(ticker)) % (2 ** 32))
+    dates = [date(2022, 1, 3) + timedelta(days=i) for i in range(n_days)]
+    shocks = rng.normal(0.0003, vol, n_days)
+    returns = np.zeros(n_days)
+    returns[0] = shocks[0]
+    for i in range(1, n_days):
+        returns[i] = autocorr * returns[i - 1] + shocks[i]
 
+    prices = [start_price]
+    for r in returns[1:]:
+        prices.append(prices[-1] * (1 + r))
 
-def test_relative_strength_missing_ticker(conn, prices_spy, params):
-    upsert_prices(conn, prices_spy)
-    score, conf = compute_relative_strength("MISSING", "SPY", conn, params, AS_OF)
-    assert score == 0.5
-    assert conf == 0.0
-
-
-def test_relative_strength_missing_index(conn, prices_etn, params):
-    upsert_prices(conn, prices_etn)
-    score, conf = compute_relative_strength("ETN", "MISSING_IDX", conn, params, AS_OF)
-    assert score == 0.5
-    assert conf == 0.0
-
-
-# ---------------------------------------------------------------------------
-# Google Trends score
-# ---------------------------------------------------------------------------
-
-def _insert_trends(conn, keyword: str, value: float = 50.0, n_weeks: int = 60):
-    """Insert synthetic trends data directly via SQL."""
-    from datetime import date as dt, timedelta
-    from src.data.db import upsert_trends
-    dates = [dt(2022, 1, 1) + timedelta(weeks=i) for i in range(n_weeks)]
-    df = pd.DataFrame({
-        "keyword": keyword,
-        "date":    [d.isoformat() for d in dates],
-        "score":   [value] * n_weeks,
-        "geo":     "US",
+    return pd.DataFrame({
+        "ticker":    ticker,
+        "date":      dates,
+        "open":      [p * 0.99 for p in prices],
+        "high":      [p * 1.01 for p in prices],
+        "low":       [p * 0.98 for p in prices],
+        "close":     prices,
+        "adj_close": prices,
+        "volume":    [int(1e6)] * n_days,
+        "currency":  currency,
+        "source":    "test",
     })
-    upsert_trends(conn, df)
-
-
-def test_trends_score_no_data(conn):
-    """No trends data → neutral 0.5, confidence 0."""
-    score, conf = compute_trends_score("nonexistent keyword", conn, AS_OF)
-    assert score == 0.5
-    assert conf == 0.0
-
-
-def test_trends_score_flat_series(conn):
-    """Perfectly flat series → all values at same percentile → neutral."""
-    _insert_trends(conn, "test keyword", value=50.0, n_weeks=60)
-    score, conf = compute_trends_score("test keyword", conn, AS_OF)
-    # p20 = p90 = 50 → degenerate case → 0.5
-    assert score == pytest.approx(0.5, abs=0.01)
-    assert conf > 0
-
-
-def test_trends_score_high_interest(conn):
-    """Last value is max → score near 1.0 (highly hyped)."""
-    from datetime import date as dt, timedelta
-    from src.data.db import upsert_trends
-    dates = [dt(2022, 1, 1) + timedelta(weeks=i) for i in range(55)]
-    scores = list(range(1, 56))  # linearly increasing; last value is max
-    df = pd.DataFrame({
-        "keyword": "hot keyword",
-        "date":    [d.isoformat() for d in dates],
-        "score":   scores,
-        "geo":     "US",
-    })
-    upsert_trends(conn, df)
-    score, conf = compute_trends_score("hot keyword", conn, AS_OF)
-    # Current (55) is above p90 → score = 1.0
-    assert score == pytest.approx(1.0)
-
-
-def test_trends_score_low_interest(conn):
-    """Last value is min → score near 0 (under the radar)."""
-    from datetime import date as dt, timedelta
-    from src.data.db import upsert_trends
-    dates = [dt(2022, 1, 1) + timedelta(weeks=i) for i in range(55)]
-    scores = list(range(55, 0, -1))  # linearly decreasing; last value is min
-    df = pd.DataFrame({
-        "keyword": "cold keyword",
-        "date":    [d.isoformat() for d in dates],
-        "score":   scores,
-        "geo":     "US",
-    })
-    upsert_trends(conn, df)
-    score, conf = compute_trends_score("cold keyword", conn, AS_OF)
-    assert score == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------
-# Short interest
+# Lag-1 autocorrelation delta
 # ---------------------------------------------------------------------------
 
-def test_short_interest_eu_neutral(conn):
-    """EU stocks → always neutral, zero confidence."""
-    score, conf = compute_short_interest_score("RHM.DE", conn, "EU")
-    assert score == 0.5
-    assert conf == 0.0
-
-
-def test_short_interest_us_no_yfinance(conn, monkeypatch):
-    """yfinance import fails → neutral, zero confidence."""
-    import builtins
-    real_import = builtins.__import__
-
-    def mock_import(name, *args, **kwargs):
-        if name == "yfinance":
-            raise ImportError("mocked")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", mock_import)
-    score, conf = compute_short_interest_score("ETN", conn, "US")
-    assert score == 0.5
-    assert conf == 0.0
-
-
-def test_short_interest_us_no_data(conn, monkeypatch):
-    """yfinance returns None for shortPercentOfFloat → neutral."""
-    import types
-
-    class FakeTicker:
-        @property
-        def info(self):
-            return {"shortPercentOfFloat": None}
-
-    fake_yf = types.ModuleType("yfinance")
-    fake_yf.Ticker = lambda t: FakeTicker()
-    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
-
-    score, conf = compute_short_interest_score("ETN", conn, "US")
-    assert score == 0.5
-    assert conf == 0.0
-
-
-def test_short_interest_us_low_short(conn, monkeypatch):
-    """Very low short interest → score near 0 (everyone is long → crowded)."""
-    import types
-
-    class FakeTicker:
-        @property
-        def info(self):
-            return {"shortPercentOfFloat": 0.005}  # 0.5%
-
-    fake_yf = types.ModuleType("yfinance")
-    fake_yf.Ticker = lambda t: FakeTicker()
-    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
-
-    score, conf = compute_short_interest_score("ETN", conn, "US")
-    assert score < 0.1
-
-
-def test_short_interest_us_high_short(conn, monkeypatch):
-    """High short interest → score near 1 (contrarian setup → anti-crowded)."""
-    import types
-
-    class FakeTicker:
-        @property
-        def info(self):
-            return {"shortPercentOfFloat": 0.20}  # 20%
-
-    fake_yf = types.ModuleType("yfinance")
-    fake_yf.Ticker = lambda t: FakeTicker()
-    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
-
-    score, conf = compute_short_interest_score("ETN", conn, "US")
-    assert score == pytest.approx(1.0)
-
-
-# ---------------------------------------------------------------------------
-# Composite crowding score
-# ---------------------------------------------------------------------------
-
-def test_crowding_score_bounds(conn, prices_etn, prices_spy, params):
-    upsert_prices(conn, prices_etn)
-    upsert_prices(conn, prices_spy)
-    result = compute_crowding_score(
-        "ETN",
-        None,    # no trends keyword
-        "SPY",   # sector ETF = SPY (different from ticker)
-        "SPY",
-        conn, params, AS_OF, "US",
+def test_lag1_autocorr_no_data(conn, params):
+    """Missing ticker → returns zeros with zero confidence."""
+    rho_cur, rho_base, delta, conf = compute_lag1_autocorr(
+        "MISSING", conn, params, AS_OF
     )
+    assert rho_cur == 0.0
+    assert delta == 0.0
+    assert conf == 0.0
+
+
+def test_lag1_autocorr_returns_tuple(conn, params):
+    """With real price data, should return a 4-tuple of floats."""
+    df = _make_prices("ETN", vol=0.015)
+    upsert_prices(conn, df)
+    result = compute_lag1_autocorr("ETN", conn, params, AS_OF)
+    assert len(result) == 4
+    rho_cur, rho_base, delta, conf = result
+    assert isinstance(delta, float)
+    assert 0.0 <= conf <= 1.0
+
+
+def test_lag1_autocorr_trending_has_positive_rho(conn, params):
+    """A strongly trending AR(1) series should have positive current autocorrelation."""
+    df_trending = _make_prices("TREND", vol=0.005, autocorr=0.6)
+    upsert_prices(conn, df_trending)
+    rho_t, _, _, conf_t = compute_lag1_autocorr("TREND", conn, params, AS_OF)
+    assert conf_t > 0
+    assert rho_t > 0, "Trending series should have positive current autocorrelation"
+
+
+# ---------------------------------------------------------------------------
+# Absorption ratio
+# ---------------------------------------------------------------------------
+
+def test_absorption_ratio_no_data(conn, params):
+    """No prices → returns neutral values with zero confidence."""
+    _, _, _, conf = compute_absorption_ratio(
+        ["ETN", "RHM.DE", "CCJ"], conn, params, AS_OF
+    )
+    assert conf == 0.0
+
+
+def test_absorption_ratio_correlated_universe(conn, params):
+    """Near-perfectly correlated prices → high absorption ratio."""
+    base = _make_prices("BASE", vol=0.015)
+    tickers = ["T1", "T2", "T3", "T4"]
+    rng = np.random.default_rng(42)
+    for t in tickers:
+        noise = rng.normal(0, 0.001, len(base))
+        df = base.copy()
+        df["ticker"]    = t
+        df["adj_close"] = df["adj_close"] * (1 + noise)
+        df["close"]     = df["adj_close"]
+        upsert_prices(conn, df)
+
+    ratio_cur, _, _, conf = compute_absorption_ratio(tickers, conn, params, AS_OF)
+    assert conf > 0
+    assert ratio_cur > 0.5, f"Correlated universe → high absorption, got {ratio_cur}"
+
+
+def test_absorption_ratio_independent_universe(conn, params):
+    """Independent random walks → absorption ratio between 0 and 1."""
+    tickers = ["I1", "I2", "I3", "I4", "I5"]
+    for t in tickers:
+        upsert_prices(conn, _make_prices(t, vol=0.02, autocorr=0.0))
+
+    ratio_cur, _, _, conf = compute_absorption_ratio(tickers, conn, params, AS_OF)
+    assert conf > 0
+    assert 0.0 < ratio_cur < 1.0
+
+
+# ---------------------------------------------------------------------------
+# Composite CSD crowding score
+# ---------------------------------------------------------------------------
+
+def test_crowding_score_bounds(conn, params):
+    """crowding_score must always be in [0, 1]."""
+    upsert_prices(conn, _make_prices("ETN"))
+    result = compute_crowding_score("ETN", conn, params, AS_OF,
+                                    absorption_delta=0.05, absorption_conf=0.8)
     assert 0.0 <= result["crowding_score"] <= 1.0
     assert 0.0 <= result["crowding_confidence"] <= 1.0
 
 
-def test_crowding_score_keys(conn, prices_etn, prices_spy, params):
-    upsert_prices(conn, prices_etn)
-    upsert_prices(conn, prices_spy)
-    result = compute_crowding_score(
-        "ETN", None, None, "SPY", conn, params, AS_OF, "US"
-    )
+def test_crowding_score_keys(conn, params):
+    """Result dict must contain expected keys."""
+    upsert_prices(conn, _make_prices("ETN"))
+    result = compute_crowding_score("ETN", conn, params, AS_OF)
     for key in ["ticker", "crowding_score", "crowding_confidence",
-                "etf_correlation", "trends_norm", "short_pct"]:
-        assert key in result
+                "autocorr_delta", "absorption_delta"]:
+        assert key in result, f"Missing key: {key}"
 
 
-def test_crowding_score_no_price_data(conn, params, monkeypatch):
-    """No price data → all sub-scores neutral → crowding = 0.5."""
-    import types
-    fake_yf = types.ModuleType("yfinance")
-
-    class _Ticker:
-        @property
-        def info(self):
-            return {}
-
-    fake_yf.Ticker = lambda t: _Ticker()
-    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
-
-    result = compute_crowding_score(
-        "ETN", None, None, "SPY", conn, params, AS_OF, "US"
-    )
-    assert result["crowding_score"] == 0.5
+def test_crowding_score_no_data(conn, params):
+    """No prices → safe neutral result, zero confidence."""
+    result = compute_crowding_score("MISSING", conn, params, AS_OF)
+    assert 0.0 <= result["crowding_score"] <= 1.0
     assert result["crowding_confidence"] == 0.0
 
 
+def test_crowding_score_high_absorption_raises_score(conn, params):
+    """Higher absorption delta → higher crowding score."""
+    upsert_prices(conn, _make_prices("ETN"))
+    low  = compute_crowding_score("ETN", conn, params, AS_OF,
+                                   absorption_delta=-0.05, absorption_conf=0.8)
+    high = compute_crowding_score("ETN", conn, params, AS_OF,
+                                   absorption_delta=+0.08, absorption_conf=0.8)
+    assert high["crowding_score"] > low["crowding_score"]
+
+
 # ---------------------------------------------------------------------------
-# Batch crowding scores
+# Batch
 # ---------------------------------------------------------------------------
 
-def test_batch_crowding_scores(conn, sample_universe, all_prices, params):
+def test_batch_crowding_scores_shape(conn, sample_universe, all_prices, params):
+    """Batch should return one row per universe stock."""
     upsert_prices(conn, all_prices)
     result = batch_crowding_scores(sample_universe, conn, params, AS_OF)
     assert len(result) == len(sample_universe)
-    assert (result["crowding_score"].between(0, 1)).all()
+    assert set(result["ticker"]) == set(sample_universe["ticker"])
 
 
-def test_batch_crowding_eu_stock_neutral_short(conn, sample_universe, all_prices, params):
-    """EU stocks should have short_pct = 0.5 (no data → neutral)."""
+def test_batch_crowding_scores_bounds(conn, sample_universe, all_prices, params):
+    """All crowding scores must be in [0, 1]."""
     upsert_prices(conn, all_prices)
     result = batch_crowding_scores(sample_universe, conn, params, AS_OF)
-    eu_row = result[result["ticker"] == "RHM.DE"]
-    assert eu_row["short_pct"].iloc[0] == pytest.approx(0.5)
+    assert (result["crowding_score"].between(0, 1)).all()

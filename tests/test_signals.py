@@ -117,17 +117,17 @@ def test_margin_snr_volatile():
 
 
 def test_inflation_convexity_positive():
-    """Revenue CAGR 12%, PPI 5% → convexity = 7pp → high score."""
-    convexity = 0.12 - 0.05
-    score = _clamp_normalize(convexity, -0.05, 0.10)
-    assert score > 0.7
+    """∂GM/∂PPI = +0.4 (strong anti-fragile) → high score on [-0.5, +0.5] range."""
+    convexity = 0.40   # each 1% PPI rise → 0.4% GM expansion
+    score = _clamp_normalize(convexity, -0.50, 0.50)
+    assert score > 0.7   # (0.40 + 0.50) / 1.0 = 0.90
 
 
 def test_inflation_convexity_negative():
-    """Revenue CAGR 2%, PPI 8% → convexity = -6pp → score = 0."""
-    convexity = 0.02 - 0.08
-    score = _clamp_normalize(convexity, -0.05, 0.10)
-    assert score == 0.0
+    """∂GM/∂PPI = -0.4 (margin compression) → low score on [-0.5, +0.5] range."""
+    convexity = -0.40
+    score = _clamp_normalize(convexity, -0.50, 0.50)
+    assert score < 0.3   # (-0.40 + 0.50) / 1.0 = 0.10
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -138,28 +138,29 @@ from src.signals.composite import compute_composite_score, MIN_COMPOSITE_CONFIDE
 
 PARAMS = {
     "signals": {
-        "weights": {"physical": 0.40, "quality": 0.35, "crowding": 0.25},
-        "entry_threshold": 0.55,
-        "crowding_entry_max": 0.40,
+        "entry_threshold":         0.30,
+        "crowding_entry_max":      0.40,
         "crowding_exit_threshold": 0.75,
-        "quality_exit_threshold": 0.25,
-        "composite_decay_pct": 0.20,
+        "quality_exit_threshold":  0.25,
+        "composite_decay_pct":     0.20,
     },
     "return_estimation": {
         "equity_risk_premium": 0.05,
-        "composite_anchors": [[0.55, 0.06], [0.70, 0.12], [0.85, 0.20], [1.00, 0.30]],
+        "theta_risk_premium":  0.30,
     },
 }
 
 
 def test_composite_full_confidence_entry():
-    """All signals available, strong scores → entry signal."""
+    """All signals available, strong scores → entry signal.
+    composite = X_E × X_P × (1−X_C) = 0.67 × 0.75 × 0.75 ≈ 0.377 > threshold 0.30.
+    """
     physical = {"ticker": "T", "physical_norm": 0.67, "physical_confidence": 1.0}
     quality  = {"ticker": "T", "quality_score": 0.75,  "quality_confidence": 1.0}
     crowding = {"ticker": "T", "crowding_score": 0.25, "crowding_confidence": 1.0}
     result = compute_composite_score(physical, quality, crowding, PARAMS, rf=0.04)
     assert result["composite_score"] is not None
-    assert result["composite_score"] > 0.55
+    assert result["composite_score"] > 0.30   # entry_threshold = 0.30
     assert result["entry_signal"] is True
 
 

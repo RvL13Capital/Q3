@@ -202,6 +202,12 @@ def batch_crowding_scores(
     """
     all_tickers = universe_df["ticker"].tolist()
 
+    if not all_tickers:
+        return pd.DataFrame(columns=[
+            "ticker", "crowding_score", "crowding_confidence",
+            "autocorr_delta", "absorption_delta",
+        ])
+
     logger.info(f"Computing absorption ratio for {len(all_tickers)} tickers")
     _, _, absorption_delta, absorption_conf = compute_absorption_ratio(
         all_tickers, conn, params, as_of_date

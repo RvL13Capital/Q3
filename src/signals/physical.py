@@ -111,18 +111,20 @@ def compute_physical_score(
         norm        = x_e_value
         method      = "logistic"
         bucket_count = len(set(stock.get("buckets") or []))
+        raw          = _BUCKET_SCORE_MAP.get(min(bucket_count, 3), 0.0)
     else:
-        norm         = _bucket_x_e(stock)
+        bucket_count = len(set(stock.get("buckets") or []))
+        raw          = _BUCKET_SCORE_MAP.get(min(bucket_count, 3), 0.0)
+        norm         = raw / 3.0
         method       = "bucket_fallback"
         ecs_proxy    = None
-        bucket_count = len(set(stock.get("buckets") or []))
 
     return {
         "ticker":               stock.get("ticker", ""),
         "bucket_count":         bucket_count,
         "primary_bucket":       stock.get("primary_bucket"),
         "ecs_proxy":            ecs_proxy,
-        "physical_raw":         round(norm * 3.0, 4),  # keep legacy scale for reporting
+        "physical_raw":         raw,   # exact bucket-step value (0, 1.5, 2.0, 3.0)
         "physical_norm":        norm,
         "physical_confidence":  1.0,
         "physical_method":      method,
