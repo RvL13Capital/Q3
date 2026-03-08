@@ -25,7 +25,7 @@ on:
       fetch_trends:
         description: "Also fetch Google Trends (slow, ~5s per keyword)"
         required: false
-        default: "false"
+        default: "true"
 
 jobs:
   run-pipeline:
@@ -71,7 +71,8 @@ jobs:
           if [ "${{ github.event.inputs.skip_fetch }}" = "true" ]; then
             ARGS="$ARGS --skip-fetch"
           fi
-          if [ "${{ github.event.inputs.fetch_trends }}" = "true" ]; then
+          # Scheduled runs always fetch trends; manual runs use the checkbox (default true)
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.fetch_trends }}" = "true" ]; then
             ARGS="$ARGS --trends"
           fi
           python src/main.py $ARGS
@@ -84,7 +85,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add snapshots/
           git diff --cached --quiet || git commit -m "chore: update dashboard snapshots [skip ci]"
-          git push origin HEAD
+          git push origin HEAD:${{ github.ref_name }}
 
       - name: Save DB cache
         if: always()
