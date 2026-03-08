@@ -20,16 +20,6 @@ stocks:
     trends_keyword: "Siemens Energy grid"
     isin: "DE000ENER6Y0"
 
-  - ticker: "ABB"
-    name: "ABB Ltd"
-    exchange: NYSE
-    region: US
-    currency: USD
-    accounting_std: GAAP
-    buckets: [grid, ai_infra]
-    primary_bucket: grid
-    trends_keyword: "ABB power automation"
-
   - ticker: "ABBNY"
     eodhd_ticker: "ABBN.SW"
     name: "ABB Ltd (Zurich)"
@@ -2104,20 +2094,8 @@ stocks:
     primary_bucket: defense
     trends_keyword: "Boeing defense aircraft missile systems"
 
-  - ticker: "SPIRE.L"
-    eodhd_ticker: "SPR.LSE"
-    name: "Spirent Communications"
-    exchange: LSE
-    region: EU
-    currency: GBP
-    accounting_std: IFRS
-    buckets: [defense, ai_infra]
-    primary_bucket: defense
-    trends_keyword: "Spirent testing cyber defense network"
-    isin: "GB0007739692"
-
-  - ticker: "DKGR.DE"
-    eodhd_ticker: "DKGR.XETRA"
+  - ticker: "DRW3.DE"
+    eodhd_ticker: "DRW3.XETRA"
     name: "Draegerwerk"
     exchange: XETRA
     region: EU
