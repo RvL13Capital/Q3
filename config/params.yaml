@@ -64,7 +64,7 @@ macro:
 # region|bucket → ETF ticker
 sector_etfs:
   EU|grid: "IQQH.DE"
-  EU|nuclear: "NUKL.SW"
+  EU|nuclear: "URA"           # NUKL.SW (.SW) has yfinance timezone bug; URA is same universe
   EU|defense: "NATO.L"
   EU|water: "IQQQ.DE"
   EU|critical_materials: "AIGI.L"
@@ -79,6 +79,8 @@ sector_etfs:
   CA|nuclear: "URA"
   CA|critical_materials: "XBM.TO"
   CA|defense: "ITA"
+  CA|water: "PHO"
+  CA|ai_infra: "SMH"
 
 # Broad market indices for relative strength calculation
 market_indices:

@@ -1969,8 +1969,8 @@ stocks:
     eodhd_ticker: "PDN.AU"
     name: "Paladin Energy"
     exchange: ASX
-    region: EU
-    currency: AUD
+    region: US
+    currency: USD
     accounting_std: IFRS
     buckets: [nuclear, critical_materials]
     primary_bucket: nuclear
