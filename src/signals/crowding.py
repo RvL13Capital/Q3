@@ -1,18 +1,23 @@
 """
-Signal 3: Crowding Score (X_C)
+Signal 3: Crowding Score (X_C) — Critical Slowing Down Index
 
-Four sub-components:
-  1. Sector ETF correlation  (60-day rolling: high correlation = herd is in)
-  2. Relative strength       (6-month vs broad market: outperformance = crowded)
-  3. Google Trends           (retail attention peak = late-cycle crowding)
-  4. Short interest          (US/CA only; high short = actually anti-crowding)
+EARKE eq 6:
+  X_C,t = clamp(ω₁·Δρ₁(t) + ω₂·Δ(λ_max / Σλ))
 
-High crowding_score = crowded = BAD for new entries.
-The composite formula inverts this: (1 - crowding) contributes to the final score.
+Two sub-components:
+  1. Δρ₁ — change in lag-1 autocorrelation of stock returns.
+     Rising autocorrelation = returns becoming mean-avoiding = CSD signal.
+  2. Δ(λ_max/Σλ) — change in absorption ratio from PCA of universe return
+     correlation matrix. Rising = stocks moving in sync = systemic crowding.
+
+High X_C = crowded / pre-crash regime = BAD for new entries.
+The composite formula inverts this: (1 - X_C) contributes to the final score.
+
+Absorption ratio is computed once per batch run (universe-level signal)
+and shared across all per-stock calls for efficiency.
 """
 import logging
-import time
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Optional
 
 import numpy as np
@@ -20,133 +25,212 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
-# Sub-score 1: Sector ETF correlation
+# Sub-score 1: Lag-1 autocorrelation delta (per-stock)
 # ---------------------------------------------------------------------------
 
-def compute_etf_correlation(
+def compute_lag1_autocorr(
     ticker: str,
-    sector_etf: str,
     conn,
     params: dict,
     as_of_date: str,
-) -> tuple[float, float]:
+) -> tuple[float, float, float, float]:
     """
-    Returns (correlation, confidence).
-    60-day rolling Pearson correlation of daily log returns.
+    Returns (rho_current, rho_baseline, delta, confidence).
+
+    delta = rho_current − rho_baseline.
+    Positive delta means autocorrelation is rising (CSD warning signal).
     """
     from src.data.db import get_prices
     from src.data.prices import compute_log_returns
 
-    window = params["signals"]["crowding"]["etf_corr_window"]
+    window   = params["signals"]["crowding"]["autocorr_window"]     # e.g. 30
+    baseline = params["signals"]["crowding"]["autocorr_baseline"]   # e.g. 120
+    total    = baseline + window + 30
+
     start = (datetime.strptime(as_of_date, "%Y-%m-%d")
-             - timedelta(days=window * 2)).strftime("%Y-%m-%d")
+             - timedelta(days=total)).strftime("%Y-%m-%d")
 
-    price_df = get_prices(conn, [ticker, sector_etf], start, as_of_date)
-    if price_df.empty or ticker not in price_df.columns or sector_etf not in price_df.columns:
-        return 0.5, 0.0
+    price_df = get_prices(conn, [ticker], start, as_of_date)
+    if price_df.empty or ticker not in price_df.columns:
+        return 0.0, 0.0, 0.0, 0.0
 
-    returns = compute_log_returns(price_df[[ticker, sector_etf]]).dropna()
+    returns = compute_log_returns(price_df[[ticker]]).dropna()
     n = len(returns)
     if n < 20:
-        return 0.5, n / 20.0
+        return 0.0, 0.0, 0.0, n / 20.0
 
-    corr = returns[ticker].corr(returns[sector_etf])
-    if pd.isna(corr):
-        return 0.5, 0.0
+    ret = returns[ticker]
 
-    # Rescale: correlation in [-1, 1] → [0, 1] (clamp negatives to 0)
-    score = max(0.0, min(1.0, (corr + 1.0) / 2.0))
-    confidence = min(1.0, n / window)
-    return round(score, 4), round(confidence, 4)
+    current_slice = ret.tail(window)
+    rho_current = float(current_slice.autocorr(lag=1)) if len(current_slice) >= 10 else 0.0
+    if pd.isna(rho_current):
+        rho_current = 0.0
+
+    baseline_slice = ret.iloc[-(baseline + window):-window]
+    rho_baseline = float(baseline_slice.autocorr(lag=1)) if len(baseline_slice) >= 10 else 0.0
+    if pd.isna(rho_baseline):
+        rho_baseline = 0.0
+
+    delta      = rho_current - rho_baseline
+    confidence = min(1.0, n / baseline)
+    return rho_current, rho_baseline, round(delta, 4), round(confidence, 4)
 
 
 # ---------------------------------------------------------------------------
-# Sub-score 2: Relative strength vs broad market
+# Sub-score 2: Absorption ratio delta (universe-level, computed once per batch)
 # ---------------------------------------------------------------------------
 
-def compute_relative_strength(
-    ticker: str,
-    market_index: str,
+def compute_absorption_ratio(
+    universe_tickers: list[str],
     conn,
     params: dict,
     as_of_date: str,
-) -> tuple[float, float]:
+) -> tuple[float, float, float, float]:
     """
-    Returns (rs_score, confidence).
-    RS = cumulative return of stock / cumulative return of market index over 126 days.
-    High RS (≥3x market) → crowding_score = 1.0
-    Low RS (≤0.5x market) → crowding_score = 0.0
+    Returns (ratio_current, ratio_baseline, delta, confidence).
+
+    Absorption ratio = λ_max / Σλ  where λ are positive eigenvalues of the
+    return correlation matrix.  Rising ratio = stocks co-moving = systemic crowding.
     """
     from src.data.db import get_prices
+    from src.data.prices import compute_log_returns
 
-    window = params["signals"]["crowding"].get("rel_strength_window", 126)
+    window = params["signals"]["crowding"]["absorption_window"]   # e.g. 60
+    total  = window * 2 + 30
+
     start = (datetime.strptime(as_of_date, "%Y-%m-%d")
-             - timedelta(days=window * 2)).strftime("%Y-%m-%d")
+             - timedelta(days=total)).strftime("%Y-%m-%d")
 
-    price_df = get_prices(conn, [ticker, market_index], start, as_of_date)
+    price_df = get_prices(conn, universe_tickers, start, as_of_date)
     if price_df.empty:
-        return 0.5, 0.0
+        return 0.5, 0.5, 0.0, 0.0
 
-    if ticker not in price_df.columns or market_index not in price_df.columns:
-        return 0.5, 0.0
+    returns = compute_log_returns(price_df).dropna(how="all")
 
-    prices = price_df[[ticker, market_index]].dropna()
-    n = len(prices)
-    if n < 30:
-        return 0.5, n / window
+    def _absorption(ret_slice: pd.DataFrame) -> Optional[float]:
+        clean = ret_slice.dropna(axis=1, how="any")
+        if clean.shape[1] < 3 or clean.shape[0] < 10:
+            return None
+        corr = clean.corr().values
+        try:
+            eigvals = np.linalg.eigvalsh(corr)
+            eigvals = eigvals[eigvals > 0]
+            if len(eigvals) == 0:
+                return None
+            return float(eigvals.max() / eigvals.sum())
+        except np.linalg.LinAlgError:
+            return None
 
-    # Use last `window` rows
-    prices = prices.tail(window)
-    ret_stock  = prices[ticker].iloc[-1] / prices[ticker].iloc[0]
-    ret_market = prices[market_index].iloc[-1] / prices[market_index].iloc[0]
+    ratio_current  = _absorption(returns.tail(window))
+    ratio_baseline = _absorption(returns.iloc[-(window * 2):-window])
 
-    if ret_market <= 0:
-        return 0.5, 0.0
+    if ratio_current is None:
+        return 0.5, 0.5, 0.0, 0.0
+    if ratio_baseline is None:
+        return ratio_current, ratio_current, 0.0, 0.5
 
-    rs = ret_stock / ret_market  # e.g. 2.0 = stock gained 2x what market gained
-    # Normalize: RS ≤ 0.5 → 0.0, RS ≥ 3.0 → 1.0, linear between
-    score = max(0.0, min(1.0, (rs - 0.5) / (3.0 - 0.5)))
-    confidence = min(1.0, n / window)
-    return round(score, 4), round(confidence, 4)
+    delta      = ratio_current - ratio_baseline
+    n_tickers  = returns.tail(window).dropna(axis=1, how="any").shape[1]
+    confidence = min(1.0, n_tickers / max(1, len(universe_tickers) * 0.5))
+    return (round(ratio_current, 4), round(ratio_baseline, 4),
+            round(delta, 4), round(confidence, 4))
 
 
 # ---------------------------------------------------------------------------
-# Sub-score 3: Google Trends
+# Composite crowding score (CSD formula, eq 6)
 # ---------------------------------------------------------------------------
 
-def compute_trends_score(
-    trends_keyword: str,
+def compute_crowding_score(
+    ticker: str,
     conn,
+    params: dict,
     as_of_date: str,
-    window_weeks: int = 52,
-) -> tuple[float, float]:
+    absorption_delta: float = 0.0,
+    absorption_conf: float = 0.0,
+) -> dict:
     """
-    Returns (trends_score, confidence).
-    Current interest / max interest over trailing 52 weeks.
-    Current ≥ 90th percentile → score 1.0 (highly hyped).
-    Current ≤ 20th percentile → score 0.0 (under the radar).
+    X_C,t = clamp(ω₁·Δρ₁ + ω₂·Δ(λ_max/Σλ))
+
+    absorption_delta / absorption_conf are pre-computed universe-level values
+    passed in from batch_crowding_scores to avoid redundant fetches.
     """
-    from src.data.db import get_trends
+    w      = params["signals"]["crowding"]
+    omega1 = w.get("csd_omega1", 0.5)
+    omega2 = w.get("csd_omega2", 0.5)
 
-    start = (datetime.strptime(as_of_date, "%Y-%m-%d")
-             - timedelta(weeks=window_weeks + 4)).strftime("%Y-%m-%d")
+    _, _, autocorr_delta, autocorr_conf = compute_lag1_autocorr(
+        ticker, conn, params, as_of_date
+    )
 
-    series = get_trends(conn, trends_keyword, start, as_of_date)
-    if series.empty:
-        return 0.5, 0.0  # neutral with zero confidence
+    # Normalize deltas to [0, 1]:
+    # Δρ₁ typical range [-0.30, +0.30]: rising autocorr → score near 1.0
+    autocorr_score   = max(0.0, min(1.0, (autocorr_delta + 0.30) / 0.60))
+    # Δ(λ_max/Σλ) typical range [-0.10, +0.10]: rising absorption → score near 1.0
+    absorption_score = max(0.0, min(1.0, (absorption_delta + 0.10) / 0.20))
 
-    current = series.iloc[-1]
-    p20 = series.quantile(0.20)
-    p90 = series.quantile(0.90)
+    crowding_score = max(0.0, min(1.0, omega1 * autocorr_score + omega2 * absorption_score))
 
-    if p90 <= p20:
-        return 0.5, 0.5
+    if absorption_conf > 0:
+        crowding_conf = (autocorr_conf + absorption_conf) / 2.0
+    else:
+        crowding_conf = autocorr_conf * 0.70  # penalise when no universe-level data
 
-    score = max(0.0, min(1.0, (current - p20) / (p90 - p20)))
-    confidence = min(1.0, len(series) / window_weeks)
-    return round(score, 4), round(confidence, 4)
+    return {
+        "ticker":              ticker,
+        "crowding_score":      round(crowding_score, 4),
+        "crowding_confidence": round(crowding_conf, 4),
+        "autocorr_delta":      round(autocorr_delta, 4),
+        "absorption_delta":    round(absorption_delta, 4),
+    }
 
+
+# ---------------------------------------------------------------------------
+# Batch entry point
+# ---------------------------------------------------------------------------
+
+def batch_crowding_scores(
+    universe_df: pd.DataFrame,
+    conn,
+    params: dict,
+    as_of_date: str,
+) -> pd.DataFrame:
+    """
+    Compute CSD crowding scores for all universe stocks.
+    Absorption ratio is computed once (universe-level) and shared across stocks.
+    """
+    all_tickers = universe_df["ticker"].tolist()
+
+    if not all_tickers:
+        return pd.DataFrame(columns=[
+            "ticker", "crowding_score", "crowding_confidence",
+            "autocorr_delta", "absorption_delta",
+        ])
+
+    logger.info(f"Computing absorption ratio for {len(all_tickers)} tickers")
+    _, _, absorption_delta, absorption_conf = compute_absorption_ratio(
+        all_tickers, conn, params, as_of_date
+    )
+    logger.info(
+        f"Absorption ratio delta={absorption_delta:.4f}  conf={absorption_conf:.2f}"
+    )
+
+    rows = []
+    for _, stock in universe_df.iterrows():
+        result = compute_crowding_score(
+            stock["ticker"], conn, params, as_of_date,
+            absorption_delta=absorption_delta,
+            absorption_conf=absorption_conf,
+        )
+        rows.append(result)
+
+    return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# Google Trends batch fetch (data pipeline — kept for DB population)
+# ---------------------------------------------------------------------------
 
 def fetch_google_trends_batch(
     keywords: list[str],
@@ -158,8 +242,9 @@ def fetch_google_trends_batch(
     """
     Fetch Google Trends for all keywords (max 5 per pytrends request).
     Stores results in google_trends table.
-    Returns combined DataFrame with columns: keyword, date, score.
+    Returns combined DataFrame with columns: keyword, date, score, geo.
     """
+    import time
     from src.data.db import upsert_trends
 
     try:
@@ -204,128 +289,3 @@ def fetch_google_trends_batch(
     if not all_rows:
         return pd.DataFrame()
     return pd.concat(all_rows, ignore_index=True)
-
-
-# ---------------------------------------------------------------------------
-# Sub-score 4: Short interest
-# ---------------------------------------------------------------------------
-
-def compute_short_interest_score(
-    ticker: str,
-    conn,
-    region: str,
-) -> tuple[float, float]:
-    """
-    Returns (score, confidence).
-    EU stocks: return (0.5, 0.0) — short data unavailable, neutral.
-    US/CA: low short % → score 0.1 (long consensus = possibly crowded)
-           high short % → score 0.9 (contrarian signal; shorts = anti-crowding)
-    """
-    if region == "EU":
-        return 0.5, 0.0
-
-    # Try fetching from yfinance info
-    try:
-        import yfinance as yf
-        info = yf.Ticker(ticker).info
-        short_pct = info.get("shortPercentOfFloat")
-        if short_pct is None:
-            return 0.5, 0.0
-        # short_pct is a fraction (0.05 = 5%)
-        # Low short (<2%) = everyone is long = crowded → score near 0
-        # High short (>15%) = heavy short = contrarian setup → score near 1
-        score = max(0.0, min(1.0, (short_pct - 0.01) / (0.15 - 0.01)))
-        return round(score, 4), 0.8  # lower confidence (data is bi-monthly)
-    except Exception:
-        return 0.5, 0.0
-
-
-# ---------------------------------------------------------------------------
-# Composite crowding score
-# ---------------------------------------------------------------------------
-
-def compute_crowding_score(
-    ticker: str,
-    trends_keyword: Optional[str],
-    sector_etf: Optional[str],
-    market_index: str,
-    conn,
-    params: dict,
-    as_of_date: str,
-    region: str,
-) -> dict:
-    """
-    Combine four sub-scores into composite crowding_score.
-    Weights from params, confidence-weighted.
-    High crowding_score = crowded = BAD (will be inverted in composite.py).
-    """
-    w = params["signals"]["crowding"]
-
-    etf_score, etf_conf = (
-        compute_etf_correlation(ticker, sector_etf, conn, params, as_of_date)
-        if sector_etf else (0.5, 0.0)
-    )
-    rs_score, rs_conf = compute_relative_strength(
-        ticker, market_index, conn, params, as_of_date
-    )
-    trend_score, trend_conf = (
-        compute_trends_score(trends_keyword, conn, as_of_date)
-        if trends_keyword else (0.5, 0.0)
-    )
-    short_score, short_conf = compute_short_interest_score(ticker, conn, region)
-
-    # Confidence-weighted average
-    weights = {
-        "etf":   w["etf_corr_weight"],
-        "rs":    w["rel_strength_weight"],
-        "trend": w["trends_weight"],
-        "short": w["short_interest_weight"],
-    }
-    scores = {"etf": etf_score,   "rs": rs_score,
-              "trend": trend_score, "short": short_score}
-    confs  = {"etf": etf_conf,    "rs": rs_conf,
-              "trend": trend_conf,  "short": short_conf}
-
-    total_w_conf = sum(weights[k] * confs[k] for k in weights)
-    if total_w_conf == 0:
-        crowding_score = 0.5
-        crowding_conf  = 0.0
-    else:
-        crowding_score = sum(scores[k] * weights[k] * confs[k] for k in weights) / total_w_conf
-        crowding_conf  = sum(confs[k] for k in confs) / 4.0
-
-    return {
-        "ticker":           ticker,
-        "crowding_score":   round(crowding_score, 4),
-        "crowding_confidence": round(crowding_conf, 4),
-        "etf_correlation":  etf_score,
-        "trends_norm":      trend_score,
-        "short_pct":        short_score,
-    }
-
-
-def batch_crowding_scores(
-    universe_df: pd.DataFrame,
-    conn,
-    params: dict,
-    as_of_date: str,
-) -> pd.DataFrame:
-    """Compute crowding scores for all stocks."""
-    from src.data.universe import get_sector_etf, get_market_index
-
-    rows = []
-    for _, stock in universe_df.iterrows():
-        sector_etf = get_sector_etf(stock["primary_bucket"], stock["region"], params)
-        market_idx = get_market_index(stock["region"], params)
-        result = compute_crowding_score(
-            stock["ticker"],
-            stock.get("trends_keyword"),
-            sector_etf,
-            market_idx,
-            conn,
-            params,
-            as_of_date,
-            stock["region"],
-        )
-        rows.append(result)
-    return pd.DataFrame(rows)

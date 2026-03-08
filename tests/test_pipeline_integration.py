@@ -219,16 +219,20 @@ def test_second_run_updates_scores(
 def test_mu_estimate_only_for_entry_candidates(
     conn, sample_universe, all_prices, fundamentals_etn, fundamentals_rhm, params
 ):
-    """mu_estimate should only be non-null for rows with composite >= entry threshold."""
+    """mu_estimate is computed for any stock with valid composite (rf + θ·composite).
+    Stocks with null composite_score (insufficient data) should have null mu_estimate."""
     _full_setup(conn, sample_universe, all_prices, fundamentals_etn, fundamentals_rhm, params)
     result = run_weekly_scoring(conn, sample_universe, params, AS_OF)
-    threshold = params["signals"]["entry_threshold"]
-    # Rows below threshold should have no mu_estimate
-    below_thresh = result[result["composite_score"].notna() &
-                          (result["composite_score"] < threshold)]
-    if not below_thresh.empty:
-        assert below_thresh["mu_estimate"].isna().all(), \
-            "mu_estimate should be null for non-entry stocks"
+    # Rows where composite_score is null must also have null mu_estimate
+    null_composite = result[result["composite_score"].isna()]
+    if not null_composite.empty:
+        assert null_composite["mu_estimate"].isna().all(), \
+            "mu_estimate must be null when composite_score is null"
+    # Rows with valid composite must have a valid mu_estimate (rf + θ·composite > 0)
+    valid_composite = result[result["composite_score"].notna()]
+    if not valid_composite.empty:
+        assert valid_composite["mu_estimate"].notna().all(), \
+            "mu_estimate must be non-null for any stock with valid composite"
 
 
 # ---------------------------------------------------------------------------

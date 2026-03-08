@@ -20,6 +20,7 @@ FRED_SERIES = {
     "US_CPI_YOY":  "CPIAUCSL",       # US CPI all items (monthly index, convert to YoY)
     "US_PPI_YOY":  "PPIACO",         # US PPI all commodities (monthly index)
     "CA_CPI_YOY":  "CPALCY01CAM661N", # Canada CPI YoY (monthly, %)
+    "US_PPIENG":   "PPIENG",         # US PPI energy (level index, for X_E logistic damper)
 }
 
 # ECB SDW series keys

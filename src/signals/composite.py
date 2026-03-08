@@ -1,8 +1,16 @@
 """
-Composite signal: combines physical, quality, and crowding into a single score.
-Uses confidence-weighted averaging so missing data contributes nothing.
+Composite signal — EARKE eq 7 (Basis-Drift Synthese):
 
-Entry:  composite >= 0.55 AND crowding <= 0.40
+  composite = X_E × X_P × (1 − X_C)
+  μ_base    = rf + θ × composite
+
+Multiplicative structure: all three tensors must be favourable simultaneously.
+X_E = physical/EROEI score (0–1)
+X_P = quality/moat score   (0–1, 0 when ROIC ≤ WACC)
+X_C = crowding/CSD score   (0–1, inverted to 1−X_C)
+θ   = risk-premium scalar (params: return_estimation.theta_risk_premium)
+
+Entry:  composite >= 0.30 AND crowding <= 0.40
 Exit:   crowding >= 0.75  OR  quality <= 0.25  OR  composite < entry * 0.80
 """
 import logging
@@ -15,40 +23,6 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 MIN_COMPOSITE_CONFIDENCE = 0.40  # below this → insufficient data → excluded
-
-
-# ---------------------------------------------------------------------------
-# μ estimate mapping
-# ---------------------------------------------------------------------------
-
-def _interpolate_mu(composite_score: float, params: dict, rf: float) -> float:
-    """
-    Map composite_score → expected excess return above rf via anchor points.
-    Returns annualized expected return (decimal).
-    """
-    anchors = params["return_estimation"]["composite_anchors"]
-    anchors = sorted(anchors, key=lambda x: x[0])
-
-    score = composite_score
-    # Below lowest anchor
-    if score <= anchors[0][0]:
-        excess = anchors[0][1]
-    # Above highest anchor
-    elif score >= anchors[-1][0]:
-        excess = anchors[-1][1]
-    else:
-        # Linear interpolation between brackets
-        for i in range(len(anchors) - 1):
-            lo_score, lo_excess = anchors[i]
-            hi_score, hi_excess = anchors[i + 1]
-            if lo_score <= score <= hi_score:
-                t = (score - lo_score) / (hi_score - lo_score)
-                excess = lo_excess + t * (hi_excess - lo_excess)
-                break
-        else:
-            excess = anchors[-1][1]
-
-    return rf + excess
 
 
 # ---------------------------------------------------------------------------
@@ -73,41 +47,34 @@ def compute_composite_score(
     """
     ticker = physical.get("ticker", quality.get("ticker", crowding.get("ticker", "")))
 
-    p_norm = physical.get("physical_norm", 0.0)
+    p_norm = physical.get("physical_norm", 0.0)   # X_E
     p_conf = physical.get("physical_confidence", 0.0)
 
-    q_score = quality.get("quality_score", 0.5)
+    q_score = quality.get("quality_score", 0.0)   # X_P
     q_conf  = quality.get("quality_confidence", 0.0)
 
-    c_score = crowding.get("crowding_score", 0.5)
+    c_score = crowding.get("crowding_score", 0.5)  # X_C
     c_conf  = crowding.get("crowding_confidence", 0.0)
-    c_inv   = 1.0 - c_score  # invert crowding: low crowding = good
+    c_inv   = 1.0 - c_score                        # (1 − X_C)
 
-    w = params["signals"]["weights"]
-    w_p = w["physical"]
-    w_q = w["quality"]
-    w_c = w["crowding"]
+    comp_conf = (p_conf + q_conf + c_conf) / 3.0
 
-    # Confidence-weighted numerator and denominator
-    denom = w_p * p_conf + w_q * q_conf + w_c * c_conf
-    if denom == 0:
-        composite = float("nan")
-        comp_conf = 0.0
-    else:
-        composite = (w_p * p_norm * p_conf + w_q * q_score * q_conf + w_c * c_inv * c_conf) / denom
-        comp_conf = (p_conf + q_conf + c_conf) / 3.0
-
-    # Data gate: if insufficient data, mark as NaN
+    # Data gate
     if comp_conf < MIN_COMPOSITE_CONFIDENCE:
         composite = float("nan")
+    else:
+        # Multiplicative per eq 7: X_E × X_P × (1 − X_C)
+        composite = p_norm * q_score * c_inv
 
-    # Entry / exit signals
+    # μ_base per eq 7: rf + θ × X_P × X_E × (1 − X_C) = rf + θ × composite
+    theta = params["return_estimation"].get("theta_risk_premium", 0.30)
     entry_threshold = params["signals"]["entry_threshold"]
     crowd_entry_max = params["signals"]["crowding_entry_max"]
     crowd_exit_thr  = params["signals"]["crowding_exit_threshold"]
     qual_exit_thr   = params["signals"]["quality_exit_threshold"]
 
     if not pd.isna(composite):
+        mu_estimate = rf + theta * composite
         entry_signal = (
             composite >= entry_threshold
             and c_score <= crowd_entry_max
@@ -118,14 +85,9 @@ def compute_composite_score(
             or q_score <= qual_exit_thr
         )
     else:
+        mu_estimate  = None
         entry_signal = False
         exit_signal  = False
-
-    # μ estimate (only for entry candidates)
-    if not pd.isna(composite) and composite >= entry_threshold:
-        mu_estimate = _interpolate_mu(composite, params, rf)
-    else:
-        mu_estimate = None
 
     return {
         "ticker":               ticker,
@@ -139,12 +101,11 @@ def compute_composite_score(
         "inflation_convexity":  quality.get("inflation_convexity"),
         "crowding_score":       c_score,
         "crowding_confidence":  c_conf,
-        "etf_correlation":      crowding.get("etf_correlation"),
-        "trends_norm":          crowding.get("trends_norm"),
-        "short_pct":            crowding.get("short_pct"),
+        "autocorr_delta":       crowding.get("autocorr_delta"),
+        "absorption_delta":     crowding.get("absorption_delta"),
         "composite_score":      round(composite, 4) if not pd.isna(composite) else None,
         "composite_confidence": round(comp_conf, 4),
-        "mu_estimate":          round(mu_estimate, 4) if mu_estimate else None,
+        "mu_estimate":          round(mu_estimate, 4) if mu_estimate is not None else None,
         "sigma_estimate":       None,  # filled in by kelly.py
         "kelly_fraction":       None,
         "kelly_25pct":          None,
@@ -176,7 +137,7 @@ def run_weekly_scoring(
 
     logger.info(f"Running weekly scoring for {len(universe_df)} stocks ({as_of_date})")
 
-    physical_df = batch_physical_scores(universe_df)
+    physical_df = batch_physical_scores(universe_df, conn=conn, params=params, as_of_date=as_of_date)
     quality_df  = batch_quality_scores(universe_df, conn, params, as_of_date)
     crowding_df = batch_crowding_scores(universe_df, conn, params, as_of_date)
 

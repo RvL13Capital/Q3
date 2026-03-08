@@ -1,13 +1,15 @@
 """
-Signal 2: Quality / Moat Score (X_P)
+Signal 2: Quality / Moat Score (X_P) — EARKE eq 5
 
-Three sub-components:
-  1. ROIC − WACC spread     (profitability above cost of capital)
-  2. Gross margin SNR        (margin stability = moat strength)
-  3. Inflation convexity     (pricing power: revenue growth > PPI)
+  X_P,i,t = max(0, E[ROIC − WACC]) × (1 / σ(GM)) × exp(γ · max(0, ∂GM/∂PPI))
 
-Each sub-score is 0–1 with a confidence weight.
-Confidence-weighted average → final quality_score 0–1.
+Three sub-components, each normalized to [0, 1], then multiplied:
+  1. ROIC − WACC spread     (hard gate: spread ≤ 0 → X_P = 0 immediately)
+  2. Gross margin SNR        (1/σ(GM) normalized: margin stability = moat)
+  3. Inflation convexity     (∂GM/∂PPI OLS slope: margin change per unit PPI change)
+
+Multiplicative structure: all three must be favourable simultaneously.
+If ROIC ≤ WACC, quality = 0 regardless of other factors.
 """
 import logging
 from typing import Optional
@@ -133,8 +135,13 @@ def compute_inflation_convexity(
 ) -> tuple[float, float, float]:
     """
     Returns (convexity, normalized_score, confidence).
-    convexity = revenue_CAGR - avg_PPI_YoY  (both decimal)
-    Positive → company is pricing above input cost inflation.
+
+    convexity = ∂GM/∂PPI: OLS slope of annual gross-margin changes vs annual PPI
+    (both in decimal). Per eq 5: exp(γ · max(0, ∂GM/∂PPI)).
+
+    Positive → margins expand when input costs rise (anti-fragile pricing power).
+    Zero     → margins move independently of input cost inflation.
+    Negative → margins are compressed by rising input costs.
     """
     from src.data.db import get_latest_fundamentals
     from src.data.macro import get_inflation_yoy
@@ -143,38 +150,52 @@ def compute_inflation_convexity(
     if df.empty:
         return float("nan"), 0.5, 0.0
 
-    revenues = df[["fiscal_year", "revenue"]].dropna().sort_values("fiscal_year")
-    n_rev = len(revenues)
-    if n_rev < 2:
-        return float("nan"), 0.5, max(0.0, n_rev / lookback_years)
+    margins = df[["fiscal_year", "gross_margin"]].dropna().sort_values("fiscal_year")
+    n = len(margins)
+    if n < 3:  # need ≥2 diffs for a regression
+        return float("nan"), 0.5, max(0.0, n / (lookback_years + 1))
 
-    # Revenue CAGR (revenues sorted ascending by fiscal_year)
-    r_start = revenues["revenue"].iloc[0]    # oldest
-    r_end   = revenues["revenue"].iloc[-1]   # newest
-    years   = revenues["fiscal_year"].iloc[-1] - revenues["fiscal_year"].iloc[0]
-    if years <= 0 or r_start <= 0:
+    # Year-over-year changes in gross margin (decimal, e.g. 0.02 for 2pp expansion)
+    delta_gm = margins["gross_margin"].diff().dropna().values
+    fiscal_years = margins["fiscal_year"].values[1:]
+
+    # Annual average PPI for each fiscal year (from monthly YoY series)
+    ppi_series = get_inflation_yoy(conn, region, "ppi", as_of_date, params,
+                                   lookback_months=(lookback_years + 1) * 12)
+    if ppi_series.empty:
         return float("nan"), 0.5, 0.0
 
-    rev_cagr = (r_end / r_start) ** (1.0 / years) - 1.0
+    ppi_series.index = pd.to_datetime(ppi_series.index)
+    annual_ppi = ppi_series.groupby(ppi_series.index.year).mean() / 100.0  # decimal
 
-    # Average PPI YoY over same period
-    ppi_series = get_inflation_yoy(conn, region, "ppi", as_of_date, params,
-                                   lookback_months=lookback_years * 12)
-    if ppi_series.empty:
-        avg_ppi = 0.04  # fallback: assume 4% PPI if data unavailable
-        ppi_confidence = 0.5
+    # Align annual_ppi to fiscal years
+    aligned_ppi = np.array([
+        annual_ppi.get(yr, float("nan")) for yr in fiscal_years
+    ])
+
+    mask = ~np.isnan(aligned_ppi) & ~np.isnan(delta_gm)
+    if mask.sum() < 2:
+        return float("nan"), 0.5, 0.0
+
+    dgm = delta_gm[mask]
+    ppi = aligned_ppi[mask]
+
+    # OLS slope: β = cov(Δgm, ppi) / var(ppi)
+    ppi_var = float(np.var(ppi, ddof=0))
+    if ppi_var < 1e-10:
+        convexity = 0.0
     else:
-        avg_ppi = ppi_series.mean() / 100.0  # convert from % to decimal
-        ppi_confidence = 1.0
+        convexity = float(np.cov(dgm, ppi, ddof=0)[0, 1] / ppi_var)
 
-    convexity = rev_cagr - avg_ppi
+    if np.isnan(convexity):
+        return float("nan"), 0.5, 0.0
 
     q_params = params["signals"]["quality"]
     score = _clamp_normalize(convexity,
                              q_params["convexity_min"],
                              q_params["convexity_max"])
 
-    confidence = min(1.0, n_rev / lookback_years) * ppi_confidence
+    confidence = min(1.0, int(mask.sum()) / lookback_years)
     return convexity, score, confidence
 
 
@@ -201,18 +222,14 @@ def compute_quality_score(
         ticker, conn, params, as_of_date, region
     )
 
-    # Confidence-weighted average of sub-scores
-    total_conf = roic_conf + margin_conf + conv_conf
-    if total_conf == 0:
-        quality_score = 0.5
-        quality_conf  = 0.0
+    # Multiplicative per eq 5: X_P = roic_score × margin_score × conv_score
+    # Hard gate: if ROIC ≤ WACC (roic_score == 0), quality = 0 immediately.
+    if roic_score == 0.0 or roic_conf == 0.0:
+        quality_score = 0.0
+        quality_conf  = roic_conf
     else:
-        quality_score = (
-            roic_score * roic_conf +
-            margin_score * margin_conf +
-            conv_score * conv_conf
-        ) / total_conf
-        quality_conf = total_conf / 3.0  # average confidence
+        quality_score = roic_score * margin_score * conv_score
+        quality_conf  = (roic_conf + margin_conf + conv_conf) / 3.0
 
     return {
         "ticker":               ticker,
