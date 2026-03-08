@@ -78,9 +78,9 @@ def run_weekly_pipeline(
     logger.info(f"Universe loaded: {len(universe)} stocks")
 
     # API keys from environment
-    fred_api_key  = os.getenv("FRED_API_KEY")
-    eodhd_api_key = os.getenv("EODHD_API_KEY")
-    eodhd_api_key_2 = os.getenv("EODHD_API_KEY_2")
+    fred_api_key  = (os.getenv("FRED_API_KEY") or "").strip() or None
+    eodhd_api_key = (os.getenv("EODHD_API_KEY") or "").strip() or None
+    eodhd_api_key_2 = (os.getenv("EODHD_API_KEY_2") or "").strip() or None
     eodhd_keys = [k for k in [eodhd_api_key, eodhd_api_key_2] if k]
 
     if not fred_api_key:
