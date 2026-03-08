@@ -153,17 +153,7 @@ stocks:
     trends_keyword: "Rolls-Royce small modular reactor"
     isin: "GB00B63H8491"
 
-  - ticker: "EDF.PA"
-    eodhd_ticker: "EDF.PA"
-    name: "EDF"
-    exchange: EURONEXT
-    region: EU
-    currency: EUR
-    accounting_std: IFRS
-    buckets: [nuclear, grid]
-    primary_bucket: nuclear
-    trends_keyword: "EDF nuclear energy France"
-    isin: "FR0010242511"
+  # EDF.PA removed — delisted June 2023 (full nationalisation, squeeze-out)
 
   - ticker: "CCJ"
     name: "Cameco"
@@ -686,8 +676,8 @@ stocks:
     trends_keyword: "Terna electricity transmission Italy"
     isin: "IT0003242622"
 
-  - ticker: "REE.MC"
-    eodhd_ticker: "REE.MC"
+  - ticker: "RED.MC"
+    eodhd_ticker: "RED.MC"
     name: "Redeia"
     exchange: BME
     region: EU

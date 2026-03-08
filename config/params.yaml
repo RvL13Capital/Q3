@@ -65,7 +65,7 @@ macro:
 sector_etfs:
   EU|grid: "IQQH.DE"
   EU|nuclear: "NUKL.SW"
-  EU|defense: "DFEN.L"
+  EU|defense: "NATO.L"
   EU|water: "IQQQ.DE"
   EU|critical_materials: "AIGI.L"
   EU|ai_infra: "XAIX.DE"
