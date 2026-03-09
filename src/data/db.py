@@ -7,8 +7,12 @@ from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Optional
 
+import logging
+
 import duckdb
 import pandas as pd
+
+_log = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "q3.duckdb"
 
@@ -220,8 +224,8 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
     ]:
         try:
             conn.execute(col_def)
-        except Exception:
-            pass  # DuckDB < 0.10 may not support IF NOT EXISTS on ALTER
+        except Exception as exc:
+            _log.warning("Schema migration failed (non-fatal): %s — %s", col_def, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -499,9 +503,15 @@ def upsert_signal_scores(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> i
     present = [c for c in _SIGNAL_SCORE_COLS if c in df.columns]
     df_insert = df[present].copy()
     cols_sql = ", ".join(present)
+    # Use ON CONFLICT instead of INSERT OR REPLACE to avoid DuckDB 1.4.x
+    # internal MERGE bug where TableStorageInfo and catalog diverge after
+    # ALTER TABLE ADD COLUMN on a cached/migrated database.
+    update_cols = [c for c in present if c not in ("ticker", "score_date")]
+    update_sql = ", ".join(f"{c} = excluded.{c}" for c in update_cols)
     conn.execute(f"""
-        INSERT OR REPLACE INTO signal_scores ({cols_sql})
+        INSERT INTO signal_scores ({cols_sql})
         SELECT {cols_sql} FROM df_insert
+        ON CONFLICT (ticker, score_date) DO UPDATE SET {update_sql}
     """)
     return len(df_insert)
 
