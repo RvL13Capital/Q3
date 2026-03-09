@@ -420,12 +420,19 @@ def _build_signal_decomp_table(portfolio: pd.DataFrame,
             return "—"
         return f"{float(v):.1f}×"
 
-    def _delta(v, scale=100):
+    def _autocorr(v):
+        """Δρ₁ as dimensionless coefficient — NOT a percentage."""
         if v is None or (isinstance(v, float) and math.isnan(v)):
             return "—"
-        return f"{float(v)*scale:+.2f}"
+        return f"{float(v):+.3f}"
 
-    headers = ["Ticker", "ROIC−WACC", "Margin SNR", "Inf.Conv.", "Autocorr Δ", "Abs.Δ", "ETF Corr"]
+    def _absdelta(v):
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return "—"
+        return f"{float(v):+.4f}"
+
+    # Autocorr Δρ₁ and Abs.Δ are market-wide CSD indicators — same per run
+    headers = ["Ticker", "ROIC−WACC", "Margin SNR", "Inf.Conv.", "Δρ₁ (CSD)", "Abs.Δ (CSD)", "ETF Corr"]
     rows    = [headers]
     style_cmds = list(_BASE_TABLE_STYLE)
     score_map  = scored_df.set_index("ticker").to_dict("index") if not scored_df.empty else {}
@@ -447,8 +454,8 @@ def _build_signal_decomp_table(portfolio: pd.DataFrame,
             f"{float(spread):.2%}" if spread is not None and not (isinstance(spread, float) and math.isnan(spread)) else "—",
             _snr(snr),
             _fmt_score(conv, 3),
-            _delta(ac),
-            _delta(ab),
+            _autocorr(ac),
+            _absdelta(ab),
             _fmt_score(etf, 3),
         ])
         style_cmds.append(("FONTNAME", (0, ri), (0, ri), "Helvetica-Bold"))
@@ -465,15 +472,24 @@ def _build_signal_decomp_table(portfolio: pd.DataFrame,
     return tbl
 
 
-def _build_near_miss_table(scored_df: pd.DataFrame, params: dict, n: int = 8) -> Table | None:
-    """Stocks that passed the confidence gate but missed entry — blocked by crowding or score."""
-    min_conf    = params["signals"]["min_composite_confidence"]
-    entry_thr   = params["signals"]["entry_threshold"]
-    crowd_max   = params["signals"]["crowding_entry_max"]
+def _build_near_miss_table(scored_df: pd.DataFrame, params: dict,
+                            top15_tickers: set | None = None,
+                            n: int = 8) -> Table | None:
+    """Stocks that passed the confidence gate but missed entry — blocked by crowding or score.
+    Excludes tickers already shown in the universe top-15 table to avoid duplication."""
+    sig       = params.get("signals", {})
+    min_conf  = sig.get("min_composite_confidence", 0.40)
+    entry_thr = sig.get("entry_threshold", 0.30)
+    crowd_max = sig.get("crowding_entry_max", 0.40)
 
     df = scored_df.dropna(subset=["composite_score"]).copy()
+    has_conf = "composite_confidence" in df.columns
+    conf_mask = (df["composite_confidence"] >= min_conf) if has_conf \
+                else pd.Series(True, index=df.index)
+    excl = top15_tickers or set()
     near = df[
-        (df["composite_confidence"] >= min_conf) &
+        conf_mask &
+        (~df["ticker"].isin(excl)) &
         (~df["entry_signal"].fillna(False)) &
         (df["composite_score"] >= entry_thr * 0.5)
     ].sort_values("composite_score", ascending=False).head(n)
@@ -734,31 +750,48 @@ def _build_portfolio_table(portfolio: pd.DataFrame, scored_df: pd.DataFrame,
     return tbl
 
 
-def _build_universe_table(scored_df: pd.DataFrame, params: dict, n: int = 15) -> Table:
+def _build_universe_table(scored_df: pd.DataFrame, params: dict,
+                           n: int = 15) -> tuple[Table, set]:
+    """Returns (table, top_tickers_set). Physical norm omitted — it is identical
+    for every stock (market-wide X_E). μ_base (mu_estimate) is stock-specific."""
     top = (scored_df.dropna(subset=["composite_score"])
            .sort_values("composite_score", ascending=False)
            .head(n))
+    top15_set = set(top["ticker"].tolist())
 
-    headers = ["#", "Ticker", "Composite", "Physical", "Quality",
-               "Crowding", "mu est.", "Kelly 25%", "Entry"]
+    # Suppress Kelly 25% column when universally null
+    has_kelly = (top["kelly_25pct"].notna().any()
+                 if "kelly_25pct" in top.columns else False)
+
+    if has_kelly:
+        headers = ["#", "Ticker", "Composite", "μ_base", "Quality",
+                   "Crowding", "Kelly 25%", "Entry"]
+        col_widths = [0.6*cm, 1.8*cm, 1.9*cm, 1.8*cm, 1.8*cm, 1.8*cm, 1.7*cm, 1.2*cm]
+        entry_ci = 7
+    else:
+        headers = ["#", "Ticker", "Composite", "μ_base", "Quality", "Crowding", "Entry"]
+        col_widths = [0.6*cm, 2.0*cm, 2.1*cm, 2.0*cm, 2.0*cm, 2.0*cm, 1.3*cm]
+        entry_ci = 6
+
     rows = [headers]
     style_cmds = list(_BASE_TABLE_STYLE)
 
     for ri, (_, r) in enumerate(top.iterrows(), start=1):
         entry = r.get("entry_signal", False)
-        rows.append([
+        row_data = [
             str(ri),
             r["ticker"],
             _fmt_score(r.get("composite_score")),
-            _fmt_score(r.get("physical_norm")),
+            _fmt_pct(r.get("mu_estimate")),
             _fmt_score(r.get("quality_score")),
             _fmt_score(r.get("crowding_score")),
-            _fmt_pct(r.get("mu_estimate")),
-            _fmt_pct(r.get("kelly_25pct")),
-            "YES" if entry else "—",
-        ])
-        for ci, col in [(2, "composite_score"), (3, "physical_norm"),
-                        (4, "quality_score")]:
+        ]
+        if has_kelly:
+            row_data.append(_fmt_pct(r.get("kelly_25pct")))
+        row_data.append("YES" if entry else "—")
+        rows.append(row_data)
+
+        for ci, col in [(2, "composite_score"), (4, "quality_score")]:
             style_cmds.append(
                 ("TEXTCOLOR", (ci, ri), (ci, ri), _rl_score_color(r.get(col)))
             )
@@ -768,17 +801,15 @@ def _build_universe_table(scored_df: pd.DataFrame, params: dict, n: int = 15) ->
                 ("TEXTCOLOR", (5, ri), (5, ri), _rl_score_color(1.0 - float(crowd)))
             )
         if entry:
-            style_cmds.append(("TEXTCOLOR", (8, ri), (8, ri), _hex("green")))
-            style_cmds.append(("FONTNAME",  (8, ri), (8, ri), "Helvetica-Bold"))
+            style_cmds.append(("TEXTCOLOR", (entry_ci, ri), (entry_ci, ri), _hex("green")))
+            style_cmds.append(("FONTNAME",  (entry_ci, ri), (entry_ci, ri), "Helvetica-Bold"))
         style_cmds.append(("FONTNAME", (1, ri), (1, ri), "Helvetica-Bold"))
         style_cmds.append(("ALIGN",    (1, ri), (1, ri), "LEFT"))
         style_cmds.append(("TEXTCOLOR", (1, ri), (1, ri), _hex("text")))
 
-    col_widths = [0.6*cm, 1.7*cm, 1.7*cm, 1.7*cm, 1.7*cm,
-                  1.7*cm, 1.6*cm, 1.6*cm, 1.2*cm]
     tbl = Table(rows, colWidths=col_widths, repeatRows=1)
     tbl.setStyle(TableStyle(style_cmds))
-    return tbl
+    return tbl, top15_set
 
 
 def _build_exits_table(exits: pd.DataFrame) -> Table | None:
@@ -814,19 +845,29 @@ def _build_entries_table(entries: pd.DataFrame, n: int = 10) -> Table | None:
     if entries.empty:
         return None
 
-    headers = ["Ticker", "Composite", "Quality", "Crowding", "mu est.", "Kelly 25%"]
+    has_kelly = (entries["kelly_25pct"].notna().any()
+                 if "kelly_25pct" in entries.columns else False)
+    if has_kelly:
+        headers    = ["Ticker", "Composite", "Quality", "Crowding", "μ_base", "Kelly 25%"]
+        col_widths = [2.0*cm, 2.0*cm, 2.0*cm, 2.0*cm, 2.0*cm, 2.0*cm]
+    else:
+        headers    = ["Ticker", "Composite", "Quality", "Crowding", "μ_base"]
+        col_widths = [2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm]
+
     rows = [headers]
     style_cmds = list(_BASE_TABLE_STYLE)
 
     for ri, (_, r) in enumerate(entries.head(n).iterrows(), start=1):
-        rows.append([
+        row_data = [
             r["ticker"],
             _fmt_score(r.get("composite_score")),
             _fmt_score(r.get("quality_score")),
             _fmt_score(r.get("crowding_score")),
             _fmt_pct(r.get("mu_estimate")),
-            _fmt_pct(r.get("kelly_25pct")),
-        ])
+        ]
+        if has_kelly:
+            row_data.append(_fmt_pct(r.get("kelly_25pct")))
+        rows.append(row_data)
         style_cmds.append(("TEXTCOLOR", (0, ri), (0, ri), _hex("green")))
         style_cmds.append(("FONTNAME",  (0, ri), (0, ri), "Helvetica-Bold"))
         for ci, col in [(1, "composite_score"), (2, "quality_score")]:
@@ -834,7 +875,6 @@ def _build_entries_table(entries: pd.DataFrame, n: int = 10) -> Table | None:
                 ("TEXTCOLOR", (ci, ri), (ci, ri), _rl_score_color(r.get(col)))
             )
 
-    col_widths = [2.0*cm, 2.0*cm, 2.0*cm, 2.0*cm, 2.0*cm, 2.0*cm]
     tbl = Table(rows, colWidths=col_widths, repeatRows=1)
     tbl.setStyle(TableStyle(style_cmds))
     return tbl
@@ -1294,17 +1334,24 @@ def generate_pdf_report(
     story.append(Spacer(1, 0.25*cm))
 
     if not scored_df.empty:
-        story.append(_build_universe_table(scored_df, params))
-        # Near-miss panel
-        near_tbl = _build_near_miss_table(scored_df, params)
+        univ_tbl, top15_set = _build_universe_table(scored_df, params)
+        story.append(univ_tbl)
+        story.append(Paragraph(
+            "Physical (X_E) omitted — it is market-wide and identical across all stocks "
+            f"({_fmt_score(scored_df['physical_norm'].iloc[0]) if 'physical_norm' in scored_df.columns and not scored_df.empty else '—'} this week).",
+            styles["muted"]
+        ))
+        # Near-miss panel — excludes tickers already in top-15
+        sig = params.get("signals", {})
+        min_conf = sig.get("min_composite_confidence", 0.40)
+        near_tbl = _build_near_miss_table(scored_df, params, top15_tickers=top15_set)
         if near_tbl:
             story.append(Spacer(1, 0.5*cm))
             story += _subsection("Near Misses — High Score, Blocked from Entry", styles)
             story.append(Paragraph(
-                "Stocks that passed the confidence gate (composite_confidence ≥ "
-                f"{params['signals']['min_composite_confidence']:.2f}) but are "
-                "not entry candidates. 'Crowding' = X_C above entry max; "
-                "'Score' = composite below entry threshold.",
+                f"Stocks not in top-15, that passed the confidence gate "
+                f"(composite_confidence ≥ {min_conf:.2f}) but are not entry candidates. "
+                "'Crowding' = X_C above entry max; 'Score' = composite below entry threshold.",
                 styles["muted"]
             ))
             story.append(Spacer(1, 0.2*cm))
@@ -1397,21 +1444,29 @@ def generate_pdf_report(
     except Exception:
         rf_ca = None
 
+    # Use canonical compute_ecs_x_e for guaranteed consistency with Module II
     try:
+        from src.signals.physical import compute_ecs_x_e as _cxe
         from src.data.db import get_macro_series as _gms
-        import numpy as _np
-        _phys3    = params.get("physical", {})
-        _ecs_lkb  = _phys3.get("ecs_lookback_months", 60)
-        _ecs_crit = _phys3.get("ecs_crit_percentile", 0.70)
-        _kappa    = _phys3.get("eroei_kappa", 10.0)
-        _fetch_st = (_date.fromisoformat(as_of_date) - _timedelta(days=(_ecs_lkb+4)*31)).isoformat()
-        _ppi_s    = _gms(conn, _phys3.get("us_energy_ppi_series", "US_PPIENG"), _fetch_st, as_of_date)
-        _ppi_val  = float(_ppi_s.iloc[-1]) if not _ppi_s.empty else None
-        _pct_rank = float((_ppi_s <= _ppi_s.iloc[-1]).mean()) if not _ppi_s.empty else None
-        _x_e      = 1/(1+_math.exp(_kappa*(_pct_rank-_ecs_crit))) if _pct_rank is not None else None
+        _phys3     = params.get("physical", {})
+        _ecs_lkb   = _phys3.get("ecs_lookback_months", 60)
+        _fetch_st  = (_date.fromisoformat(as_of_date) - _timedelta(days=(_ecs_lkb + 4) * 31)).isoformat()
+        _ppi_s     = _gms(conn, _phys3.get("us_energy_ppi_series", "US_PPIENG"), _fetch_st, as_of_date)
+        _ppi_val   = float(_ppi_s.iloc[-1]) if not _ppi_s.empty else None
+        _win_months = len(_ppi_s)
+        _x_e_raw, _pct_rank = _cxe(conn, params, as_of_date)
+        _x_e      = None if (_x_e_raw != _x_e_raw) else _x_e_raw   # nan check
+        _pct_rank = None if (_pct_rank != _pct_rank) else _pct_rank
     except Exception:
-        _ppi_val, _pct_rank, _x_e = None, None, None
+        _ppi_val, _pct_rank, _x_e, _win_months = None, None, None, None
 
+    _ecs_spec = params.get("physical", {}).get("ecs_lookback_months", 60)
+    _ecs_note = (
+        f"Position in {_win_months}-month window "
+        f"(⚠ spec: {_ecs_spec}m — wider history needed)"
+        if _win_months is not None and _win_months < _ecs_spec
+        else "Position in 5-year window (low = EROEI-favourable)"
+    )
     macro_rows = [
         ["Region / Series", "Value", "Interpretation"],
         ["US 10Y Risk-Free Rate",  f"{rf_us:.2%}",  "WACC baseline for US equity"],
@@ -1421,10 +1476,10 @@ def generate_pdf_report(
          "WACC baseline for CA equity"],
         ["PPIENG (latest index)",
          f"{_ppi_val:.1f}" if _ppi_val is not None else "—",
-         "US Energy Producer Price Index"],
+         "US Energy Producer Price Index (level)"],
         ["PPIENG ECS percentile rank",
-         f"{_pct_rank:.0%}" if _pct_rank is not None else "—",
-         "Position in 5-year window (low = favourable)"],
+         f"{_pct_rank:.1%}" if _pct_rank is not None else "—",
+         _ecs_note],
         ["X_E — EROEI logistic signal",
          f"{_x_e:.3f}" if _x_e is not None else "—",
          "1=max EROEI advantage, 0=energy-cost cliff"],
