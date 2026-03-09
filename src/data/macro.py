@@ -16,11 +16,12 @@ ECB_BASE  = "https://data-api.ecb.europa.eu/service/data"
 
 # FRED series IDs
 FRED_SERIES = {
-    "US_10Y":      "DGS10",          # US 10-year Treasury yield (daily, %)
-    "US_CPI_YOY":  "CPIAUCSL",       # US CPI all items (monthly index, convert to YoY)
-    "US_PPI_YOY":  "PPIACO",         # US PPI all commodities (monthly index)
+    "US_10Y":      "DGS10",           # US 10-year Treasury yield (daily, %)
+    "US_CPI_YOY":  "CPIAUCSL",        # US CPI all items (monthly index, convert to YoY)
+    "US_PPI_YOY":  "PPIACO",          # US PPI all commodities (monthly index)
     "CA_CPI_YOY":  "CPALCY01CAM661N", # Canada CPI YoY (monthly, %)
-    "US_PPIENG":   "PPIENG",         # US PPI energy (level index, for X_E logistic damper)
+    "CA_10Y":      "IRLTLT01CAM156N", # Bank of Canada 10-year bond yield (monthly, %)
+    "US_PPIENG":   "PPIENG",          # US PPI energy (level index, for X_E logistic damper)
 }
 
 # ECB SDW series keys

@@ -319,6 +319,50 @@ def get_latest_fundamentals(
     """, [ticker, n_years]).df()
 
 
+def get_margin_history(
+    conn: duckdb.DuckDBPyConnection,
+    ticker: str,
+    n_years: int = 5,
+) -> pd.DataFrame:
+    """
+    Return gross_margin history for use in margin-stability and inflation-convexity
+    calculations. Prefers annual data; supplements with quarterly data (averaged
+    per fiscal year) when fewer than 3 annual rows are available.
+
+    Returns DataFrame with columns: fiscal_year, gross_margin.
+    Sorted ascending by fiscal_year (oldest first, required by diff() callers).
+    """
+    annual = conn.execute("""
+        SELECT fiscal_year, gross_margin
+        FROM fundamentals_annual
+        WHERE ticker = ? AND gross_margin IS NOT NULL
+        ORDER BY fiscal_year DESC
+        LIMIT ?
+    """, [ticker, n_years]).df()
+
+    if len(annual) >= 3:
+        return annual.sort_values("fiscal_year").reset_index(drop=True)
+
+    # Supplement with quarterly data
+    quarterly = conn.execute("""
+        SELECT fiscal_year, AVG(gross_margin) AS gross_margin
+        FROM fundamentals_quarterly
+        WHERE ticker = ? AND gross_margin IS NOT NULL
+        GROUP BY fiscal_year
+        ORDER BY fiscal_year DESC
+        LIMIT ?
+    """, [ticker, n_years]).df()
+
+    if quarterly.empty:
+        return annual.sort_values("fiscal_year").reset_index(drop=True)
+
+    # Merge: annual rows take precedence; quarterly fills in remaining years
+    annual_years = set(annual["fiscal_year"].tolist())
+    extra = quarterly[~quarterly["fiscal_year"].isin(annual_years)]
+    combined = pd.concat([annual, extra], ignore_index=True)
+    return combined.sort_values("fiscal_year").reset_index(drop=True)
+
+
 # ---------------------------------------------------------------------------
 # Macro helpers
 # ---------------------------------------------------------------------------

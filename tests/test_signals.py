@@ -22,26 +22,29 @@ def test_physical_no_bucket():
     result = compute_physical_score({"ticker": "X", "buckets": [], "primary_bucket": None})
     assert result["physical_raw"] == 0.0
     assert result["physical_norm"] == 0.0
-    assert result["physical_confidence"] == 1.0
+    # bucket_fallback path (no params supplied): default fallback_conf = 0.40
+    assert result["physical_confidence"] == pytest.approx(0.40)
 
 
 def test_physical_single_bucket():
     result = compute_physical_score({"ticker": "RHM.DE", "buckets": ["defense"], "primary_bucket": "defense"})
     assert result["physical_raw"] == 1.5
     assert result["physical_norm"] == pytest.approx(0.5)
-    assert result["physical_confidence"] == 1.0
+    assert result["physical_confidence"] == pytest.approx(0.40)  # bucket_fallback
 
 
 def test_physical_two_buckets():
     result = compute_physical_score({"ticker": "ENR.DE", "buckets": ["grid", "critical_materials"], "primary_bucket": "grid"})
     assert result["physical_raw"] == 2.0
     assert result["physical_norm"] == pytest.approx(2.0 / 3.0)
+    assert result["physical_confidence"] == pytest.approx(0.40)  # bucket_fallback
 
 
 def test_physical_three_or_more_buckets():
     result = compute_physical_score({"ticker": "X", "buckets": ["grid", "nuclear", "defense"], "primary_bucket": "grid"})
     assert result["physical_raw"] == 3.0
     assert result["physical_norm"] == 1.0
+    assert result["physical_confidence"] == pytest.approx(0.40)  # bucket_fallback
 
 
 def test_physical_deduplicates_buckets():
@@ -138,11 +141,12 @@ from src.signals.composite import compute_composite_score, MIN_COMPOSITE_CONFIDE
 
 PARAMS = {
     "signals": {
-        "entry_threshold":         0.30,
-        "crowding_entry_max":      0.40,
-        "crowding_exit_threshold": 0.75,
-        "quality_exit_threshold":  0.25,
-        "composite_decay_pct":     0.20,
+        "entry_threshold":          0.30,
+        "crowding_entry_max":       0.40,
+        "crowding_exit_threshold":  0.75,
+        "quality_exit_threshold":   0.25,
+        "composite_decay_pct":      0.20,
+        "min_composite_confidence": 0.40,
     },
     "return_estimation": {
         "equity_risk_premium": 0.05,

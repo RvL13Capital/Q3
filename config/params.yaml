@@ -16,9 +16,10 @@ signals:
   crowding_exit_threshold: 0.75 # exit if X_C rises above this
   quality_exit_threshold: 0.25  # exit if X_P falls below this (post-gate)
   composite_decay_pct: 0.20     # exit if composite decays > 20% from entry value
+  min_composite_confidence: 0.40  # below this → insufficient data → excluded
 
   crowding:
-    # CSD (Critical Slowing Down) parameters — eq 6: X_C = clamp(ω₁·Δρ₁ + ω₂·Δ(λ_max/Σλ) [+ ω₃·trends])
+    # CSD (Critical Slowing Down) parameters — eq 6: X_C = clamp(ω₁·Δρ₁ + ω₂·Δ(λ_max/Σλ) [+ ω₃·trends + ω₄·etf_corr + ω₅·short_int])
     autocorr_window: 30          # rolling days for current lag-1 autocorrelation
     autocorr_baseline: 120       # days for baseline autocorrelation (delta reference)
     absorption_window: 60        # days for correlation matrix eigenvalue computation
@@ -29,16 +30,29 @@ signals:
     csd_omega3: 0.20             # weight for Google Trends crowding proxy
     trends_window_recent: 30     # trailing days for "current" Trends average
     trends_window_baseline: 90   # trailing days for baseline Trends comparison
+    # Sector ETF rolling correlation — only applied when ETF price data is present.
+    # High correlation between stock and sector ETF signals herd co-movement.
+    csd_omega_etf: 0.15          # weight for ETF rolling correlation sub-score
+    etf_corr_window: 60          # days for rolling Pearson correlation
+    etf_corr_baseline: 120       # days for baseline correlation (delta reference)
+    # Short interest — only applied when short_interest table has data for the ticker.
+    # Extreme short-interest spikes signal crowded positioning (both sides).
+    csd_omega_short: 0.10        # weight for short-interest sub-score
+    short_interest_window: 30    # days to average short_pct_float for current reading
+    short_interest_high: 0.25    # pct_float threshold → score = 1.0 (fully crowded)
+    short_interest_low: 0.05     # pct_float threshold → score = 0.0 (no signal)
 
   quality:
     roic_wacc_spread_min: 0.0    # hard gate: ROIC ≤ WACC → X_P = 0
-    roic_wacc_spread_max: +0.20  # normalized to 1 above this
+    roic_wacc_spread_max: +0.20  # normalization ceiling for raw spread (eq 5 primary scale)
     margin_snr_min: 2.0
     margin_snr_max: 10.0
     # ∂GM/∂PPI: OLS slope of annual Δgross_margin vs annual PPI (both decimal)
     # e.g. +0.5 → each 1pp PPI rise → 0.5pp margin expansion (anti-fragile)
-    convexity_min: -0.50
-    convexity_max: +0.50
+    # gamma: steepness of the exp(γ·max(0, slope)) convexity multiplier (eq 5)
+    # gamma=2 → slope=0.5 → exp(1.0)=2.72× amplification for strong pricing power
+    gamma: 2.0
+    convexity_max: +0.50         # slope beyond this is treated as fully anti-fragile
     lookback_years: 5
 
 physical:
@@ -49,6 +63,7 @@ physical:
   ecs_crit_percentile: 0.70    # 70th pct = structural energy cost headwind
   ecs_lookback_months: 60      # 5-year rolling window for percentile
   us_energy_ppi_series: "US_PPIENG"  # FRED PPIENG level index
+  bucket_fallback_confidence: 0.40   # reported when PPIENG unavailable and bucket approximation used
 
 return_estimation:
   equity_risk_premium: 0.05   # added on top of regional risk-free rate for WACC
@@ -67,7 +82,7 @@ data:
 macro:
   eu_risk_free_series: "EU_10Y_DE"
   us_risk_free_series: "US_10Y"
-  ca_risk_free_series: "US_10Y"   # proxy
+  ca_risk_free_series: "CA_10Y"   # Bank of Canada 10Y (FRED: IRLTLT01CAM156N)
   eu_cpi_series: "EU_HICP_YOY"
   eu_ppi_series: "EU_PPI_YOY"
   us_cpi_series: "US_CPI_YOY"

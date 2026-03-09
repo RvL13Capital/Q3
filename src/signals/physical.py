@@ -95,29 +95,42 @@ def compute_physical_score(
     stock: dict | pd.Series,
     x_e_value: Optional[float] = None,
     ecs_proxy: Optional[float] = None,
+    params: Optional[dict] = None,
 ) -> dict:
     """
     Assemble physical score for a single stock.
 
     x_e_value — pre-computed logistic X_E (passed in from batch to avoid N DB hits)
     ecs_proxy — the ECS percentile that produced x_e_value (for reporting)
+    params    — full params dict; used to read bucket_fallback_confidence
 
     If x_e_value is None or nan, falls back to bucket-count approximation.
+    Confidence is 1.0 when the logistic formula succeeds; reads
+    params.physical.bucket_fallback_confidence (default 0.40) on fallback,
+    because the bucket approximation is materially less precise than PPIENG data.
     """
     if isinstance(stock, pd.Series):
         stock = stock.to_dict()
 
+    fallback_conf = 0.40
+    if params is not None:
+        fallback_conf = float(
+            params.get("physical", {}).get("bucket_fallback_confidence", 0.40)
+        )
+
     if x_e_value is not None and not (isinstance(x_e_value, float) and np.isnan(x_e_value)):
-        norm        = x_e_value
-        method      = "logistic"
+        norm         = x_e_value
+        method       = "logistic"
         bucket_count = len(set(stock.get("buckets") or []))
         raw          = _BUCKET_SCORE_MAP.get(min(bucket_count, 3), 0.0)
+        confidence   = 1.0
     else:
         bucket_count = len(set(stock.get("buckets") or []))
         raw          = _BUCKET_SCORE_MAP.get(min(bucket_count, 3), 0.0)
         norm         = raw / 3.0
         method       = "bucket_fallback"
         ecs_proxy    = None
+        confidence   = fallback_conf
 
     return {
         "ticker":               stock.get("ticker", ""),
@@ -126,7 +139,7 @@ def compute_physical_score(
         "ecs_proxy":            ecs_proxy,
         "physical_raw":         raw,   # exact bucket-step value (0, 1.5, 2.0, 3.0)
         "physical_norm":        norm,
-        "physical_confidence":  1.0,
+        "physical_confidence":  confidence,
         "physical_method":      method,
     }
 
@@ -164,6 +177,7 @@ def batch_physical_scores(
             row,
             x_e_value=x_e_value if not np.isnan(x_e_value) else None,
             ecs_proxy=ecs_proxy if not np.isnan(ecs_proxy) else None,
+            params=params,
         )
         for _, row in universe_df.iterrows()
     ]

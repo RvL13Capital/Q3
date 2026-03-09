@@ -55,27 +55,26 @@ def _insert_macro(conn, params):
 def test_roic_wacc_spread_above_cost_of_capital(conn, fundamentals_etn, params):
     upsert_fundamentals_annual(conn, fundamentals_etn)
     _insert_macro(conn, params)
-    spread, score, conf = compute_roic_wacc_spread("ETN", conn, params, AS_OF, "US")
-    # Our synthetic ROIC ≈ 0.07; WACC ≈ 4.3/100 + 5/100 ≈ 0.093 → spread negative/close to 0
+    spread, conf = compute_roic_wacc_spread("ETN", conn, params, AS_OF, "US")
+    # Synthetic ROIC ≈ 0.118; WACC ≈ 4.3/100 + 5/100 = 9.3% → positive spread
     assert conf > 0, "Should have confidence with real data"
-    assert 0.0 <= score <= 1.0
+    assert isinstance(spread, float)
 
 
 def test_roic_wacc_spread_no_data(conn, params):
-    """No fundamentals → nan spread, 0.5 score, 0 confidence."""
+    """No fundamentals → nan spread, 0 confidence."""
     _insert_macro(conn, params)
-    spread, score, conf = compute_roic_wacc_spread("MISSING", conn, params, AS_OF, "US")
+    spread, conf = compute_roic_wacc_spread("MISSING", conn, params, AS_OF, "US")
     import math
     assert math.isnan(spread)
-    assert score == 0.5
     assert conf == 0.0
 
 
 def test_roic_wacc_spread_no_macro(conn, fundamentals_etn, params):
-    """No macro data → falls back to 4% RF, still returns valid score."""
+    """No macro data → falls back to 4% RF, still returns valid spread."""
     upsert_fundamentals_annual(conn, fundamentals_etn)
     # Don't insert macro → fallback RF = 4%
-    spread, score, conf = compute_roic_wacc_spread("ETN", conn, params, AS_OF, "US")
+    spread, conf = compute_roic_wacc_spread("ETN", conn, params, AS_OF, "US")
     assert conf > 0
 
 
@@ -83,7 +82,7 @@ def test_roic_wacc_spread_eu_region(conn, fundamentals_rhm, params):
     """EU stock should use EU risk-free rate."""
     upsert_fundamentals_annual(conn, fundamentals_rhm)
     _insert_macro(conn, params)
-    spread, score, conf = compute_roic_wacc_spread("RHM.DE", conn, params, AS_OF, "EU")
+    spread, conf = compute_roic_wacc_spread("RHM.DE", conn, params, AS_OF, "EU")
     assert conf > 0
 
 
@@ -135,15 +134,14 @@ def test_margin_snr_confidence_scales_with_years(conn, params, fundamentals_etn)
 # ---------------------------------------------------------------------------
 
 def test_inflation_convexity_stable_margins(conn, fundamentals_etn, params):
-    """Constant gross margins (delta=0) → OLS slope = 0 → neutral midpoint score."""
+    """Constant gross margins (delta=0) → OLS slope = 0."""
     upsert_fundamentals_annual(conn, fundamentals_etn)
     _insert_macro(conn, params)
-    convexity, score, conf = compute_inflation_convexity(
+    convexity, conf = compute_inflation_convexity(
         "ETN", conn, params, AS_OF, "US", lookback_years=3
     )
     # Synthetic ETN has constant 40% GM → delta_gm = 0 → slope = 0
     assert convexity == pytest.approx(0.0, abs=1e-6)
-    assert score == pytest.approx(0.5)
     assert conf > 0
 
 
@@ -185,19 +183,18 @@ def test_inflation_convexity_varying_margins(conn, params):
                                 "value": ppi_val, "source": "test"})
     upsert_macro(conn, params["macro"]["us_ppi_series"], pd.DataFrame(macro_rows))
 
-    convexity, score, conf = compute_inflation_convexity(
+    convexity, conf = compute_inflation_convexity(
         "VGMTEST", conn, params, "2024-12-31", "US", lookback_years=4
     )
     assert convexity > 0, f"Rising margins + rising PPI → positive slope, got {convexity}"
-    assert score > 0.5
     assert conf > 0
 
 
 def test_inflation_convexity_no_ppi_data(conn, fundamentals_etn, params):
-    """No PPI data in DB → returns (nan, 0.5, 0.0) — no automatic fallback."""
+    """No PPI data in DB → returns (nan, 0.0) — no automatic fallback."""
     upsert_fundamentals_annual(conn, fundamentals_etn)
     import math
-    convexity, score, conf = compute_inflation_convexity(
+    convexity, conf = compute_inflation_convexity(
         "ETN", conn, params, AS_OF, "US", lookback_years=3
     )
     assert math.isnan(convexity)
@@ -207,7 +204,7 @@ def test_inflation_convexity_no_ppi_data(conn, fundamentals_etn, params):
 def test_inflation_convexity_no_fundamentals(conn, params):
     """No fundamental data → nan convexity."""
     import math
-    convexity, score, conf = compute_inflation_convexity(
+    convexity, conf = compute_inflation_convexity(
         "MISSING", conn, params, AS_OF, "US"
     )
     assert math.isnan(convexity)
@@ -255,10 +252,9 @@ def test_quality_score_keys(conn, fundamentals_etn, params):
 def test_quality_score_good_company_scores_higher(conn, params,
                                                    fundamentals_etn, fundamentals_rhm):
     """Both companies have positive ROIC spread → quality_score > 0.
-    Synthetic data has constant GM → convexity=0 → conv_score=0.5.
-    ROIC≈20%, WACC≈9.3% → spread≈10.7pp → roic_score≈0.54.
-    Margin SNR (constant GM) → score=1.0.
-    quality_score ≈ 0.54 × 1.0 × 0.5 ≈ 0.27 — profitable, positive.
+    Synthetic data: ROIC≈11.8%, WACC≈9.3% → spread≈2.5pp → spread_factor=0.125.
+    Constant GM → SNR high → snr_norm≈1.0. Convexity=0 → exp(0)=1.0.
+    quality_score ≈ 0.125 × 1.0 × 1.0 = 0.125 — positive moat confirmed.
     """
     upsert_fundamentals_annual(conn, fundamentals_etn)
     upsert_fundamentals_annual(conn, fundamentals_rhm)
