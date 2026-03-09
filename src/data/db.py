@@ -144,6 +144,8 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
             crowding_confidence DOUBLE,
             autocorr_delta      DOUBLE,
             absorption_delta    DOUBLE,
+            etf_corr_score      DOUBLE,
+            short_interest_score DOUBLE,
             composite_score     DOUBLE,
             composite_confidence DOUBLE,
             mu_estimate         DOUBLE,
@@ -197,6 +199,16 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("""
         CREATE SEQUENCE IF NOT EXISTS fetch_log_seq START 1
     """)
+
+    # Schema migrations: add new columns to existing DBs without losing data.
+    for col_def in [
+        "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS etf_corr_score DOUBLE",
+        "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS short_interest_score DOUBLE",
+    ]:
+        try:
+            conn.execute(col_def)
+        except Exception:
+            pass  # DuckDB < 0.10 may not support IF NOT EXISTS on ALTER
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +331,50 @@ def get_latest_fundamentals(
     """, [ticker, n_years]).df()
 
 
+def get_margin_history(
+    conn: duckdb.DuckDBPyConnection,
+    ticker: str,
+    n_years: int = 5,
+) -> pd.DataFrame:
+    """
+    Return gross_margin history for use in margin-stability and inflation-convexity
+    calculations. Prefers annual data; supplements with quarterly data (averaged
+    per fiscal year) when fewer than 3 annual rows are available.
+
+    Returns DataFrame with columns: fiscal_year, gross_margin.
+    Sorted ascending by fiscal_year (oldest first, required by diff() callers).
+    """
+    annual = conn.execute("""
+        SELECT fiscal_year, gross_margin
+        FROM fundamentals_annual
+        WHERE ticker = ? AND gross_margin IS NOT NULL
+        ORDER BY fiscal_year DESC
+        LIMIT ?
+    """, [ticker, n_years]).df()
+
+    if len(annual) >= 3:
+        return annual.sort_values("fiscal_year").reset_index(drop=True)
+
+    # Supplement with quarterly data
+    quarterly = conn.execute("""
+        SELECT fiscal_year, AVG(gross_margin) AS gross_margin
+        FROM fundamentals_quarterly
+        WHERE ticker = ? AND gross_margin IS NOT NULL
+        GROUP BY fiscal_year
+        ORDER BY fiscal_year DESC
+        LIMIT ?
+    """, [ticker, n_years]).df()
+
+    if quarterly.empty:
+        return annual.sort_values("fiscal_year").reset_index(drop=True)
+
+    # Merge: annual rows take precedence; quarterly fills in remaining years
+    annual_years = set(annual["fiscal_year"].tolist())
+    extra = quarterly[~quarterly["fiscal_year"].isin(annual_years)]
+    combined = pd.concat([annual, extra], ignore_index=True)
+    return combined.sort_values("fiscal_year").reset_index(drop=True)
+
+
 # ---------------------------------------------------------------------------
 # Macro helpers
 # ---------------------------------------------------------------------------
@@ -414,7 +470,7 @@ _SIGNAL_SCORE_COLS = [
     "ticker", "score_date", "physical_raw", "physical_norm", "physical_confidence",
     "quality_score", "quality_confidence", "roic_wacc_spread", "margin_snr",
     "inflation_convexity", "crowding_score", "crowding_confidence",
-    "autocorr_delta", "absorption_delta",
+    "autocorr_delta", "absorption_delta", "etf_corr_score", "short_interest_score",
     "composite_score", "composite_confidence",
     "mu_estimate", "sigma_estimate", "kelly_fraction", "kelly_25pct",
     "entry_signal", "exit_signal",

@@ -10,6 +10,7 @@ from pathlib import Path
 # Make sure src/ is on the path when run from repo root
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+import yaml
 import pandas as pd
 import streamlit as st
 
@@ -18,12 +19,22 @@ from src.data.universe import load_universe
 
 DB_PATH       = Path(__file__).parent.parent.parent / "data" / "q3.duckdb"
 SNAPSHOT_DIR  = Path(__file__).parent.parent.parent / "snapshots"
+_PARAMS_PATH  = Path(__file__).parent.parent.parent / "config" / "params.yaml"
 
-# Single source of truth for exit/watch thresholds used by Tab 4
-# (matches params["signals"]["crowding_exit_threshold"] and
-#  params["reporting"]["watch_crowding_threshold"])
-_CROWD_EXIT = 0.75
-_WATCH_THR  = 0.55
+
+def _load_thresholds() -> tuple[float, float]:
+    """Load crowd-exit and watch thresholds from params.yaml with safe defaults."""
+    try:
+        with open(_PARAMS_PATH) as fh:
+            p = yaml.safe_load(fh)
+        crowd_exit = float(p["signals"]["crowding_exit_threshold"])
+        watch_thr  = float(p["reporting"]["watch_crowding_threshold"])
+        return crowd_exit, watch_thr
+    except Exception:
+        return 0.75, 0.55  # fallback to EARKE spec defaults
+
+
+_CROWD_EXIT, _WATCH_THR = _load_thresholds()
 
 _SCORE_COLS = ["ticker", "composite_score", "quality_score", "crowding_score", "physical_norm"]
 
@@ -72,9 +83,9 @@ def load_data():
 def _color_crowding(val):
     if pd.isna(val):
         return ""
-    if val >= 0.75:
+    if val >= _CROWD_EXIT:
         return "background-color: #ffcccc"
-    if val >= 0.55:
+    if val >= _WATCH_THR:
         return "background-color: #fff3cc"
     return "background-color: #ccffcc"
 
@@ -616,7 +627,7 @@ def run_dashboard():
                     len(filtered),
                     f'{filtered["composite_score"].mean():.3f}' if not filtered.empty else "—",
                     int(filtered["entry_signal"].sum()) if "entry_signal" in filtered.columns else "—",
-                    int((filtered["crowding_score"] >= 0.75).sum()) if not filtered.empty else "—",
+                    int((filtered["crowding_score"] >= _CROWD_EXIT).sum()) if not filtered.empty else "—",
                 ],
                 ["#00e5ff", "#00ff88", "#ffb800", "#ff3060"],
             ):
@@ -633,7 +644,7 @@ def run_dashboard():
                     st.markdown(_section_header("TOP ENTRY SIGNALS"), unsafe_allow_html=True)
                     cols = st.columns(min(5, len(top_entries)))
                     for i, (_, r) in enumerate(top_entries.head(5).iterrows()):
-                        crowd_c = "#ff3060" if r["crowding_score"] >= 0.75 else "#ffb800" if r["crowding_score"] >= 0.55 else "#00ff88"
+                        crowd_c = "#ff3060" if r["crowding_score"] >= _CROWD_EXIT else "#ffb800" if r["crowding_score"] >= _WATCH_THR else "#00ff88"
                         cols[i].markdown(
                             _stat_card(r["ticker"], f'{r["composite_score"]:.3f}',
                                        sub=f'crowd {r["crowding_score"]:.2f}', accent="#00ff88"),
@@ -658,7 +669,7 @@ def run_dashboard():
                 phys  = row.get("physical_norm",   0) or 0
                 qual  = row.get("quality_score",   0) or 0
                 crowd = row.get("crowding_score",  0) or 0
-                crowd_acc = "#ff3060" if crowd >= 0.75 else "#ffb800" if crowd >= 0.55 else "#00ff88"
+                crowd_acc = "#ff3060" if crowd >= _CROWD_EXIT else "#ffb800" if crowd >= _WATCH_THR else "#00ff88"
 
                 st.markdown("---")
                 mc1, mc2, mc3, mc4 = st.columns(4)
@@ -712,7 +723,7 @@ def run_dashboard():
                     ]:
                         v = row.get(key)
                         v_str = f"{v:.4f}" if pd.notna(v) else "—"
-                        c = "#ff3060" if (pd.notna(v) and v >= 0.75) else "#ffb800" if (pd.notna(v) and v >= 0.55) else "#7aacc0"
+                        c = "#ff3060" if (pd.notna(v) and v >= _CROWD_EXIT) else "#ffb800" if (pd.notna(v) and v >= _WATCH_THR) else "#7aacc0"
                         st.markdown(
                             f'<div style="display:flex;justify-content:space-between;'
                             f'font-family:\'Share Tech Mono\',monospace;font-size:0.7rem;'
@@ -767,11 +778,11 @@ def run_dashboard():
             st.info("No portfolio or signal data.")
         else:
             a1, a2, a3 = st.columns(3)
-            a1.markdown(_stat_card("EXIT TRIGGERED", str(n_red), sub="crowding ≥ 0.75", accent="#ff3060"), unsafe_allow_html=True)
-            a2.markdown(_stat_card("WATCH ZONE",     str(n_yel), sub="crowding 0.55–0.75", accent="#ffb800"), unsafe_allow_html=True)
+            a1.markdown(_stat_card("EXIT TRIGGERED", str(n_red), sub=f"crowding ≥ {_CROWD_EXIT:.2f}", accent="#ff3060"), unsafe_allow_html=True)
+            a2.markdown(_stat_card("WATCH ZONE",     str(n_yel), sub=f"crowding {_WATCH_THR:.2f}–{_CROWD_EXIT:.2f}", accent="#ffb800"), unsafe_allow_html=True)
             a3.markdown(_stat_card("CLEAR",
                                    str(len(display_alerts) - n_red - n_yel),
-                                   sub="crowding < 0.55", accent="#00ff88"), unsafe_allow_html=True)
+                                   sub=f"crowding < {_WATCH_THR:.2f}", accent="#00ff88"), unsafe_allow_html=True)
 
             st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
@@ -787,11 +798,11 @@ def run_dashboard():
 
                 # threshold lines as text
                 st.markdown(
-                    '<div style="font-family:\'Share Tech Mono\',monospace;font-size:0.65rem;'
-                    'margin-top:10px">'
-                    '<div style="color:#ff3060;margin-bottom:4px">▬ EXIT threshold: 0.75</div>'
-                    '<div style="color:#ffb800;margin-bottom:4px">▬ WATCH threshold: 0.55</div>'
-                    '</div>',
+                    f'<div style="font-family:\'Share Tech Mono\',monospace;font-size:0.65rem;'
+                    f'margin-top:10px">'
+                    f'<div style="color:#ff3060;margin-bottom:4px">▬ EXIT threshold: {_CROWD_EXIT:.2f}</div>'
+                    f'<div style="color:#ffb800;margin-bottom:4px">▬ WATCH threshold: {_WATCH_THR:.2f}</div>'
+                    f'</div>',
                     unsafe_allow_html=True,
                 )
 

@@ -78,17 +78,23 @@ def run_weekly_pipeline(
     logger.info(f"Universe loaded: {len(universe)} stocks")
 
     # API keys from environment
-    fred_api_key  = (os.getenv("FRED_API_KEY") or "").strip() or None
-    eodhd_api_key = (os.getenv("EODHD_API_KEY") or "").strip() or None
+    fred_api_key    = (os.getenv("FRED_API_KEY")  or "").strip() or None
+    eodhd_api_key   = (os.getenv("EODHD_API_KEY") or "").strip() or None
     eodhd_api_key_2 = (os.getenv("EODHD_API_KEY_2") or "").strip() or None
+    tiingo_api_key  = (os.getenv("TIINGO_API")    or "").strip() or None
+    dbnomics_api_key = (os.getenv("DB_KEY")       or "").strip() or None
     eodhd_keys = [k for k in [eodhd_api_key, eodhd_api_key_2] if k]
 
     if not fred_api_key:
         logger.warning("FRED_API_KEY not set — US/CA macro data unavailable")
     if not eodhd_keys:
-        logger.warning("EODHD_API_KEY not set — using yfinance for all data")
+        logger.warning("EODHD_API_KEY not set — using yfinance/Tiingo for all data")
     elif len(eodhd_keys) > 1:
         logger.info(f"EODHD: {len(eodhd_keys)} API keys loaded (key rotation enabled)")
+    if tiingo_api_key:
+        logger.info("TIINGO_API loaded — Tiingo fallback enabled for US/CA prices")
+    if dbnomics_api_key:
+        logger.info("DB_KEY loaded — DBnomics authenticated requests enabled")
 
     # ── 2. Data Refresh ──────────────────────────────────────────────────────
     if not skip_fetch:
@@ -101,6 +107,7 @@ def run_weekly_pipeline(
             extra_tickers=extra_tickers,
             eodhd_api_key=eodhd_keys[0] if eodhd_keys else None,
             eodhd_api_keys=eodhd_keys,
+            tiingo_api_key=tiingo_api_key,
             force_refresh=force_refresh,
         )
         n_updated = sum(1 for v in price_results.values() if v == "updated")
@@ -123,7 +130,12 @@ def run_weekly_pipeline(
         logger.info("── Fetching macro data ──")
         from src.data.macro import update_macro
 
-        update_macro(conn, params, fred_api_key=fred_api_key, force_refresh=force_refresh)
+        update_macro(
+            conn, params,
+            fred_api_key=fred_api_key,
+            dbnomics_api_key=dbnomics_api_key,
+            force_refresh=force_refresh,
+        )
 
         if fetch_trends:
             logger.info("── Fetching Google Trends ──")

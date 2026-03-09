@@ -22,7 +22,9 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-MIN_COMPOSITE_CONFIDENCE = 0.40  # below this → insufficient data → excluded
+# Kept as a module-level constant so test code that imports it directly still works.
+# Runtime reads params["signals"]["min_composite_confidence"] which overrides this.
+MIN_COMPOSITE_CONFIDENCE = 0.40
 
 
 # ---------------------------------------------------------------------------
@@ -59,8 +61,11 @@ def compute_composite_score(
 
     comp_conf = (p_conf + q_conf + c_conf) / 3.0
 
-    # Data gate
-    if comp_conf < MIN_COMPOSITE_CONFIDENCE:
+    # Data gate — threshold from params; fall back to module constant for compat.
+    min_conf = params.get("signals", {}).get(
+        "min_composite_confidence", MIN_COMPOSITE_CONFIDENCE
+    )
+    if comp_conf < min_conf:
         composite = float("nan")
     else:
         # Multiplicative per eq 7: X_E × X_P × (1 − X_C)
@@ -103,6 +108,8 @@ def compute_composite_score(
         "crowding_confidence":  c_conf,
         "autocorr_delta":       crowding.get("autocorr_delta"),
         "absorption_delta":     crowding.get("absorption_delta"),
+        "etf_corr_score":       crowding.get("etf_corr_score"),
+        "short_interest_score": crowding.get("short_interest_score"),
         "composite_score":      round(composite, 4) if not pd.isna(composite) else None,
         "composite_confidence": round(comp_conf, 4),
         "mu_estimate":          round(mu_estimate, 4) if mu_estimate is not None else None,

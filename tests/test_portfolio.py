@@ -63,9 +63,8 @@ def _make_scored_row(ticker: str, composite: float = 0.70, entry: bool = True,
         "inflation_convexity":  0.04,
         "crowding_score":       crowding,
         "crowding_confidence":  0.8,
-        "etf_correlation":      0.30,
-        "trends_norm":          0.20,
-        "short_pct":            0.30,
+        "etf_corr_score":       0.30,
+        "short_interest_score": 0.20,
         "composite_score":      composite,
         "composite_confidence": 0.85,
         "mu_estimate":          mu if entry else None,
@@ -107,26 +106,28 @@ def _make_portfolio_snapshot(conn, tickers, snapshot_date=AS_OF, weight=0.07):
 class TestKellyFormula:
     def test_positive_edge(self):
         # mu=15%, rf=4%, sigma=20% → f* = 0.25 * (0.15-0.04)/0.04 = 0.6875
-        f = kelly_fraction(mu=0.15, sigma=0.20, rf=0.04, fraction=0.25)
+        f, _ = kelly_fraction(mu=0.15, sigma=0.20, rf=0.04, fraction=0.25)
         assert f == pytest.approx(0.6875)
 
     def test_negative_edge_returns_zero(self):
-        assert kelly_fraction(mu=0.03, sigma=0.20, rf=0.04, fraction=0.25) == 0.0
+        f, _ = kelly_fraction(mu=0.03, sigma=0.20, rf=0.04, fraction=0.25)
+        assert f == 0.0
 
     def test_clamped_at_one(self):
         # Very high mu → would exceed 1.0 without clamping
-        f = kelly_fraction(mu=5.0, sigma=0.01, rf=0.04, fraction=0.25)
+        f, _ = kelly_fraction(mu=5.0, sigma=0.01, rf=0.04, fraction=0.25)
         assert f == pytest.approx(1.0)
 
     def test_zero_sigma_returns_zero(self):
-        assert kelly_fraction(mu=0.15, sigma=0.0, rf=0.04, fraction=0.25) == 0.0
+        f, _ = kelly_fraction(mu=0.15, sigma=0.0, rf=0.04, fraction=0.25)
+        assert f == 0.0
 
     def test_smaller_fraction_gives_smaller_weight(self):
         # mu=10%, rf=4%, sigma=30% → raw = fraction * (0.10-0.04)/0.09
         # With fraction=1.0 → 0.667; 0.5 → 0.333; 0.25 → 0.167 — all < 1.0 (no clamping)
-        f_full = kelly_fraction(0.10, 0.30, 0.04, fraction=1.0)
-        f_half = kelly_fraction(0.10, 0.30, 0.04, fraction=0.5)
-        f_qtr  = kelly_fraction(0.10, 0.30, 0.04, fraction=0.25)
+        f_full, _ = kelly_fraction(0.10, 0.30, 0.04, fraction=1.0)
+        f_half, _ = kelly_fraction(0.10, 0.30, 0.04, fraction=0.5)
+        f_qtr,  _ = kelly_fraction(0.10, 0.30, 0.04, fraction=0.25)
         assert f_full > f_half > f_qtr > 0
 
 
