@@ -496,6 +496,9 @@ def fetch_google_trends_batch(
 
     all_rows = []
     batch_size = 5
+    consecutive_429 = 0
+    skipped_batches = 0
+    _MAX_CONSECUTIVE_429 = 2  # abort session after this many consecutive rate-limits
 
     for i in range(0, len(keywords), batch_size):
         batch = keywords[i: i + batch_size]
@@ -503,6 +506,7 @@ def fetch_google_trends_batch(
             pt = TrendReq(hl="en-US", tz=0, timeout=(10, 25))
             pt.build_payload(batch, timeframe=timeframe, geo=geo)
             df = pt.interest_over_time()
+            consecutive_429 = 0  # reset on success
             if df.empty:
                 continue
             if "isPartial" in df.columns:
@@ -523,7 +527,19 @@ def fetch_google_trends_batch(
             ) if all_rows else pd.DataFrame())
 
         except Exception as e:
-            logger.warning(f"Google Trends batch {batch} failed: {e}")
+            if "429" in str(e):
+                consecutive_429 += 1
+                skipped_batches += 1
+                if consecutive_429 >= _MAX_CONSECUTIVE_429:
+                    remaining = (len(keywords) - i - batch_size + batch_size - 1) // batch_size
+                    logger.warning(
+                        f"Google Trends rate-limited (429) — aborting after "
+                        f"{consecutive_429} consecutive failures. "
+                        f"{skipped_batches + remaining} batches skipped total."
+                    )
+                    break
+            else:
+                logger.warning(f"Google Trends batch {batch} failed: {e}")
 
         time.sleep(delay_secs)
 

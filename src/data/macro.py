@@ -30,7 +30,7 @@ FRED_SERIES = {
 ECB_SERIES = {
     "EU_10Y_DE":   "YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y",  # German Bund 10Y
     "EU_HICP_YOY": "ICP/M.U2.N.000000.4.ANR",               # EU HICP YoY
-    "EU_PPI_YOY":  "STS/M.I8.N.PROD.NS0020.4.000",          # EU PPI
+    "EU_PPI_YOY":  "STS/M.U2.N.PROD.NS0020.4.ANR",          # EU PPI YoY (Eurozone, annual rate)
 }
 
 # DBnomics series keys (provider/dataset/series) — fallback for EU series
@@ -38,7 +38,7 @@ ECB_SERIES = {
 DBNOMICS_SERIES = {
     "EU_10Y_DE":   "ECB/YC/B.U2.EUR.4F.G_N_A.SV_C_YM.SR_10Y",
     "EU_HICP_YOY": "ECB/ICP/M.U2.N.000000.4.ANR",
-    "EU_PPI_YOY":  "ECB/STS/M.I8.N.PROD.NS0020.4.000",
+    "EU_PPI_YOY":  "ECB/STS/M.U2.N.PROD.NS0020.4.ANR",
 }
 
 
