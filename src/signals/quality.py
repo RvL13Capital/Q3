@@ -47,11 +47,14 @@ def compute_roic_wacc_spread(
     params: dict,
     as_of_date: str,
     region: str,
+    rf_cache: dict | None = None,
 ) -> tuple[float, float]:
     """
     Returns (spread, confidence).
     spread = roic - wacc  (decimal, e.g. 0.10 for 10pp moat above cost of capital).
     Spread is returned raw — caller applies max(0, spread) and normalises by spread_max.
+
+    rf_cache: optional {region: rf_rate} dict to avoid repeated DB lookups in batch mode.
     """
     from src.data.db import get_latest_fundamentals
     from src.data.macro import get_risk_free_rate
@@ -64,7 +67,8 @@ def compute_roic_wacc_spread(
     if pd.isna(roic):
         return float("nan"), 0.0
 
-    rf = get_risk_free_rate(conn, region, as_of_date, params)
+    rf = rf_cache[region] if (rf_cache and region in rf_cache) else \
+        get_risk_free_rate(conn, region, as_of_date, params)
     erp = params["return_estimation"]["equity_risk_premium"]
     wacc = rf + erp  # simplified WACC (no beta, no leverage adjustment for MVP)
 
@@ -205,6 +209,7 @@ def compute_quality_score(
     params: dict,
     as_of_date: str,
     region: str,
+    rf_cache: dict | None = None,
 ) -> dict:
     """
     X_P per eq 5: max(0, ROIC−WACC) × (1/σ(GM)) × exp(γ · max(0, ∂GM/∂PPI))
@@ -222,7 +227,7 @@ def compute_quality_score(
     gamma       = float(q_params.get("gamma", 2.0))
 
     spread, roic_conf = compute_roic_wacc_spread(
-        ticker, conn, params, as_of_date, region
+        ticker, conn, params, as_of_date, region, rf_cache=rf_cache
     )
     snr, margin_score, margin_conf = compute_margin_snr(ticker, conn, params)
     convexity, conv_conf = compute_inflation_convexity(
@@ -267,10 +272,17 @@ def batch_quality_scores(
     as_of_date: str,
 ) -> pd.DataFrame:
     """Compute quality scores for all stocks. Returns DataFrame."""
+    from src.data.macro import get_risk_free_rate
+
+    # Pre-fetch rf rates once per unique region instead of once per stock.
+    regions = universe_df["region"].unique().tolist()
+    rf_cache = {r: get_risk_free_rate(conn, r, as_of_date, params) for r in regions}
+
     rows = []
     for _, stock in universe_df.iterrows():
         result = compute_quality_score(
-            stock["ticker"], conn, params, as_of_date, stock["region"]
+            stock["ticker"], conn, params, as_of_date, stock["region"],
+            rf_cache=rf_cache,
         )
         rows.append(result)
     return pd.DataFrame(rows)

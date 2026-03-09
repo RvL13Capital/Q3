@@ -148,16 +148,25 @@ def run_weekly_scoring(
     quality_df  = batch_quality_scores(universe_df, conn, params, as_of_date)
     crowding_df = batch_crowding_scores(universe_df, conn, params, as_of_date)
 
+    # Pre-fetch rf rates once per region for the mu_base calculation.
+    regions  = universe_df["region"].unique().tolist()
+    rf_cache = {r: get_risk_free_rate(conn, r, as_of_date, params) for r in regions}
+
+    # Index sub-score DataFrames for O(1) lookup (preserve "ticker" key in each row dict).
+    p_idx = {r["ticker"]: r.to_dict() for _, r in physical_df.iterrows()} if not physical_df.empty else {}
+    q_idx = {r["ticker"]: r.to_dict() for _, r in quality_df.iterrows()}   if not quality_df.empty  else {}
+    c_idx = {r["ticker"]: r.to_dict() for _, r in crowding_df.iterrows()}  if not crowding_df.empty else {}
+
     rows = []
     for _, stock in universe_df.iterrows():
         ticker = stock["ticker"]
         region = stock["region"]
 
-        p = physical_df[physical_df["ticker"] == ticker].iloc[0].to_dict() if not physical_df[physical_df["ticker"] == ticker].empty else {}
-        q = quality_df[quality_df["ticker"] == ticker].iloc[0].to_dict() if not quality_df[quality_df["ticker"] == ticker].empty else {}
-        c = crowding_df[crowding_df["ticker"] == ticker].iloc[0].to_dict() if not crowding_df[crowding_df["ticker"] == ticker].empty else {}
+        p = p_idx.get(ticker, {})
+        q = q_idx.get(ticker, {})
+        c = c_idx.get(ticker, {})
 
-        rf = get_risk_free_rate(conn, region, as_of_date, params)
+        rf = rf_cache.get(region, rf_cache.get("US", 0.04))
         result = compute_composite_score(p, q, c, params, rf=rf)
         result["score_date"] = as_of_date
         rows.append(result)

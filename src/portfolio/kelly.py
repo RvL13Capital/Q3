@@ -243,6 +243,10 @@ def compute_kelly_weights(
     aum             = float(kelly_params.get("aum_eur", 0.0))
     impact_scaling  = float(kelly_params.get("impact_scaling", 1.0))
 
+    # Pre-fetch rf rates once per region.
+    regions  = universe_df["region"].unique().tolist()
+    rf_cache = {r: get_risk_free_rate(conn, r, as_of_date, params) for r in regions}
+
     rows = []
     for _, row in candidates.iterrows():
         ticker      = row["ticker"]
@@ -250,7 +254,7 @@ def compute_kelly_weights(
         region      = region_info["region"]        if region_info is not None else "US"
         bucket      = region_info["primary_bucket"] if region_info is not None else None
 
-        rf = get_risk_free_rate(conn, region, as_of_date, params)
+        rf = rf_cache.get(region, rf_cache.get("US", 0.04))
         mu = row.get("mu_estimate")
         if mu is None or pd.isna(mu):
             continue
