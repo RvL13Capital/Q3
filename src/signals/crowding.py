@@ -29,6 +29,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from src.data.universe import get_sector_etf
+
 logger = logging.getLogger(__name__)
 
 
@@ -353,6 +355,12 @@ def compute_crowding_score(
     # Δ(λ_max/Σλ) typical range [-0.10, +0.10]: rising absorption → score near 1.0
     absorption_score = max(0.0, min(1.0, (absorption_delta + 0.10) / 0.20))
 
+    # Capture optional sub-scores as named variables; add to components only when data present.
+    # Avoids fragile weight-value matching when extracting scores from the component list.
+    trend_score = 0.0
+    etf_score   = 0.0
+    short_score = 0.0
+
     # Build weighted components list — only include optional ones when data exists
     components = [
         (omega1, autocorr_score,   autocorr_conf),
@@ -364,6 +372,7 @@ def compute_crowding_score(
         try:
             ts, tc = _get_trends_crowding_score(conn, trends_keyword, as_of_date, params)
             if tc > 0:
+                trend_score = ts
                 components.append((omega3, ts, tc))
         except Exception as e:
             logger.debug(f"Trends score unavailable for {ticker}: {e}")
@@ -373,6 +382,7 @@ def compute_crowding_score(
         try:
             es, ec = compute_etf_correlation_score(ticker, etf_ticker, conn, params, as_of_date)
             if ec > 0:
+                etf_score = es
                 components.append((omega_etf, es, ec))
         except Exception as e:
             logger.debug(f"ETF correlation unavailable for {ticker}: {e}")
@@ -382,6 +392,7 @@ def compute_crowding_score(
         try:
             ss, sc = compute_short_interest_score(ticker, conn, params, as_of_date)
             if sc > 0:
+                short_score = ss
                 components.append((omega_si, ss, sc))
         except Exception as e:
             logger.debug(f"Short interest unavailable for {ticker}: {e}")
@@ -396,10 +407,6 @@ def compute_crowding_score(
             sum(c[0] * c[1] for c in components) / total_w
         ))
         crowding_conf = sum(c[0] * c[2] for c in components) / total_w
-
-    trend_score = next((c[1] for c in components if c[0] == omega3), 0.0)
-    etf_score   = next((c[1] for c in components if c[0] == omega_etf), 0.0)
-    short_score = next((c[1] for c in components if c[0] == omega_si), 0.0)
 
     return {
         "ticker":              ticker,
@@ -445,8 +452,6 @@ def batch_crowding_scores(
 
     rows = []
     for _, stock in universe_df.iterrows():
-        # Look up sector ETF for this stock's region + primary_bucket
-        from src.data.universe import get_sector_etf
         etf_ticker = get_sector_etf(
             stock.get("primary_bucket", ""),
             stock.get("region", ""),
