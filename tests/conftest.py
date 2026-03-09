@@ -223,13 +223,15 @@ def params():
     """Mirrors config/params.yaml — keep in sync when params change."""
     return {
         "kelly": {
-            "fraction":       0.25,
-            "max_position":   0.08,
-            "max_bucket":     0.35,
-            "min_position":   0.02,
-            "cash_reserve":   0.10,
-            "aum_eur":        50_000_000,
-            "impact_scaling": 1.0,
+            "fraction":           0.25,
+            "max_position":       0.08,
+            "max_bucket":         0.35,
+            "min_position":       0.02,
+            "cash_reserve":       0.10,
+            "aum_eur":            50_000_000,
+            "impact_scaling":     1.0,
+            "lambda_epist":       0.25,       # eq 12 epistemic penalty coefficient
+            "not_aus_confidence": 0.20,       # composite_confidence < this → Not-Aus
         },
         "signals": {
             "entry_threshold":           0.30,

@@ -62,6 +62,83 @@ def test_kelly_raw_gte_25pct():
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# σ_epist / Not-Aus tests (eq 12 — epistemic risk terms)
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_kelly_sigma_epist_reduces_fraction():
+    """High σ_epist (low confidence) must reduce f* compared to σ_epist=0."""
+    f_no_epist, _ = kelly_fraction(mu=0.15, sigma=0.30, rf=0.04, fraction=0.25, sigma_epist=0.0)
+    # sigma_epist=0.10, lambda=0.25: mu_eff = 0.11 - 0.025 = 0.085 > 0 but < 0.11
+    f_with_epist, _ = kelly_fraction(mu=0.15, sigma=0.30, rf=0.04, fraction=0.25, sigma_epist=0.10)
+    assert f_with_epist < f_no_epist
+
+
+def test_kelly_sigma_epist_zero_unchanged():
+    """sigma_epist=0 must give identical result to the baseline (backward compatible)."""
+    f_base, fraw_base = kelly_fraction(mu=0.15, sigma=0.30, rf=0.04, fraction=0.25)
+    f_epist, fraw_epist = kelly_fraction(mu=0.15, sigma=0.30, rf=0.04, fraction=0.25, sigma_epist=0.0)
+    assert f_base == pytest.approx(f_epist, abs=1e-9)
+    assert fraw_base == pytest.approx(fraw_epist, abs=1e-9)
+
+
+def test_kelly_not_aus_fires():
+    """Not-Aus: sigma_epist >= not_aus_threshold → f* = 0 immediately."""
+    f, fraw = kelly_fraction(
+        mu=0.15, sigma=0.30, rf=0.04, fraction=0.25,
+        sigma_epist=0.80,
+        not_aus_threshold=0.80,
+    )
+    assert f == 0.0
+    assert fraw == 0.0
+
+
+def test_kelly_not_aus_below_threshold():
+    """Not-Aus does NOT fire when sigma_epist < not_aus_threshold."""
+    # sigma_epist=0.05, lambda=0.25: mu_eff = 0.11 - 0.0125 = 0.0975 > 0; 0.05 < 0.80 threshold
+    f, _ = kelly_fraction(
+        mu=0.15, sigma=0.30, rf=0.04, fraction=0.25,
+        sigma_epist=0.05,
+        not_aus_threshold=0.80,
+    )
+    assert f > 0.0
+
+
+def test_kelly_not_aus_disabled_when_threshold_zero():
+    """not_aus_threshold=0 (default) means Not-Aus is disabled."""
+    f, _ = kelly_fraction(
+        mu=0.15, sigma=0.30, rf=0.04, fraction=0.25,
+        sigma_epist=0.99,
+        not_aus_threshold=0.0,
+    )
+    # sigma_epist is large but Not-Aus disabled; lambda penalty kills f anyway
+    # Just assert no exception and result is ≥ 0
+    assert f >= 0.0
+
+
+def test_kelly_epist_large_kills_position():
+    """When σ_epist is large enough, the linear penalty makes mu_eff ≤ 0 → f* = 0."""
+    # lambda_epist=0.25, sigma_epist=0.50, mu-rf=0.11: mu_eff = 0.11 - 0.125 = -0.015 → 0
+    f, _ = kelly_fraction(
+        mu=0.15, sigma=0.30, rf=0.04, fraction=0.25,
+        sigma_epist=0.50, lambda_epist=0.25,
+    )
+    assert f == 0.0
+
+
+def test_kelly_lambda_epist_scale():
+    """Higher lambda_epist → stronger penalty → lower f*."""
+    f_low, _ = kelly_fraction(
+        mu=0.20, sigma=0.30, rf=0.04, fraction=0.25,
+        sigma_epist=0.10, lambda_epist=0.5,
+    )
+    f_high, _ = kelly_fraction(
+        mu=0.20, sigma=0.30, rf=0.04, fraction=0.25,
+        sigma_epist=0.10, lambda_epist=2.0,
+    )
+    assert f_high < f_low
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Portfolio construction constraint tests
 # ────────────────────────────────────────────────────────────────────────────
 

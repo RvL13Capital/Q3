@@ -1,23 +1,31 @@
 """
 Fractional Kelly position sizing — EARKE eq 12.
 
-Full objective (without σ_epist, which requires deep ensembles):
+Full objective (eq 12 — Robust Kelly):
 
   f* = argmax_f [
-      (μ − rf) · f
-      − ½ · σ² · f²
-      − c · σ · |f − f_old|^1.5 · √(W / V)
+      (μ_base + μ_NN) · f              ← total expected return (μ_NN=0 until Module III)
+      − λ · σ_epist · f                ← epistemic risk penalty (Not-Aus trigger)
+      − ½ · (σ²_alea + σ²_epist) · f² ← total variance (aleatoric + epistemic)
+      − c · σ_alea · |f − f_old|^1.5 · √(W/V)  ← market impact cost
   ]
 
-  c  = impact_scaling (≈1.0, dimensionless)
-  W  = AUM in currency units (params: kelly.aum_eur)
-  V  = average daily dollar volume of the stock (last 60 days)
-  f_old = last Kelly fraction for this ticker (from portfolio_snapshots)
+  c        = impact_scaling (≈1.0, dimensionless)
+  W        = AUM in currency units (params: kelly.aum_eur)
+  V        = average daily dollar volume (last 60 days)
+  f_old    = last Kelly fraction for this ticker (from portfolio_snapshots)
+  σ_epist  = epistemic uncertainty proxy (from Deep Ensembles, Phase 3;
+             currently derived as 1 − composite_confidence)
+  λ        = lambda_epist penalty coefficient (params: kelly.lambda_epist)
+
+Not-Aus (emergency stop):
+  σ_epist ≥ not_aus_threshold → f* = 0 immediately.
+  In the composite_confidence proxy: not_aus_threshold = 1 − not_aus_confidence,
+  so composite_confidence < not_aus_confidence triggers Not-Aus.
 
 When W/V is small (liquid stock, small fund), the impact term is negligible and
-f* ≈ fraction × (μ−rf)/σ² (classical fractional Kelly).
-As AUM grows, the impact penalty rises, progressively reducing optimal f* and
-ultimately capping W_max — implementing Goodhart immunity through physics.
+f* ≈ fraction × (μ−rf−λ·σ_epist) / (σ²+σ²_epist)  (generalised fractional Kelly).
+As AUM grows, the impact penalty rises, ultimately capping W_max — Goodhart immunity.
 
 Optimised via scipy.optimize.minimize_scalar on [0, 1].
 """
@@ -140,46 +148,66 @@ def kelly_fraction(
     aum: float = 0.0,
     daily_dollar_volume: float = 0.0,
     impact_scaling: float = 1.0,
+    sigma_epist: float = 0.0,
+    lambda_epist: float = 0.25,
+    not_aus_threshold: float = 0.0,
 ) -> tuple[float, float]:
     """
-    Optimise the Kelly objective with market impact penalty.
+    Optimise the eq 12 Kelly objective with epistemic penalty and market impact.
+
+    Parameters
+    ----------
+    sigma_epist       : epistemic uncertainty proxy [0, ∞).  Derived from
+                        composite_confidence as (1 − confidence) until Deep
+                        Ensembles are implemented (Module III).
+    lambda_epist      : linear penalty coefficient λ for the σ_epist term.
+    not_aus_threshold : σ_epist ≥ this → f* = 0 (Not-Aus).  0 = disabled.
 
     Returns (f_adjusted, f_full) where:
-      f_full     = unconstrained optimizer solution (full Kelly, pre-fraction)
+      f_full     = unconstrained optimiser solution (full Kelly, pre-fraction)
       f_adjusted = fraction × f_full, clamped to [0, 1]
 
-    When daily_dollar_volume == 0 or aum == 0, degrades gracefully to the
-    classic fractional Kelly: fraction × (μ−rf) / σ².
+    Degrades gracefully: when sigma_epist=0 the result is identical to the
+    pre-Module-III behaviour.
     """
+    # ── Not-Aus gate (σ_epist → ∞ ⟹ f* = 0) ────────────────────────────────
+    if not_aus_threshold > 0 and sigma_epist >= not_aus_threshold:
+        return 0.0, 0.0
+
     if sigma <= 0 or mu <= rf:
         return 0.0, 0.0
 
-    # Impact term weight √(W/V); 0 when either unknown
+    # ── Total variance (aleatoric + epistemic) ───────────────────────────────
+    sigma_sq_total = sigma ** 2 + sigma_epist ** 2
+
+    # ── Effective excess return after linear epistemic penalty ───────────────
+    mu_eff = (mu - rf) - lambda_epist * sigma_epist
+    if mu_eff <= 0:
+        return 0.0, 0.0
+
+    # ── Impact term weight √(W/V); 0 when either unknown ────────────────────
     if daily_dollar_volume > 0 and aum > 0:
         sqrt_wv = np.sqrt(aum / daily_dollar_volume)
     else:
         sqrt_wv = 0.0
 
     if sqrt_wv < 1e-8:
-        # No impact data — fall back to classical fractional Kelly
-        f_full     = (mu - rf) / (sigma ** 2)
+        # No impact data — generalised fractional Kelly
+        f_full     = mu_eff / sigma_sq_total
         f_adjusted = float(max(0.0, min(1.0, fraction * f_full)))
         return f_adjusted, f_full
 
-    mu_robust = mu - rf  # excess return
-
     def neg_objective(f: float) -> float:
-        growth    = mu_robust * f - 0.5 * sigma ** 2 * f ** 2
-        turnover  = abs(f - f_old)
-        impact    = impact_scaling * sigma * (turnover ** 1.5) * sqrt_wv
+        growth   = mu_eff * f - 0.5 * sigma_sq_total * f ** 2
+        turnover = abs(f - f_old)
+        impact   = impact_scaling * sigma * (turnover ** 1.5) * sqrt_wv
         return -(growth - impact)
 
-    # Optimise over [0, 1/fraction] — equivalent range to the full Kelly,
-    # so fraction scaling afterward gives the same result as classic fractional Kelly
-    # when impact is negligible.
-    upper = min(4.0, 1.0 / max(fraction, 0.05))  # cap at 4× full Kelly
+    # Optimise over [0, 1/fraction] so fraction scaling is consistent with
+    # classic fractional Kelly when impact and σ_epist are negligible.
+    upper = min(4.0, 1.0 / max(fraction, 0.05))
     result = minimize_scalar(neg_objective, bounds=(0.0, upper), method="bounded")
-    f_full     = float(result.x) if result.success else mu_robust / sigma ** 2
+    f_full     = float(result.x) if result.success else mu_eff / sigma_sq_total
     f_adjusted = float(max(0.0, min(1.0, fraction * f_full)))
 
     return f_adjusted, f_full
@@ -242,6 +270,11 @@ def compute_kelly_weights(
     frac            = kelly_params["fraction"]
     aum             = float(kelly_params.get("aum_eur", 0.0))
     impact_scaling  = float(kelly_params.get("impact_scaling", 1.0))
+    lambda_epist    = float(kelly_params.get("lambda_epist", 0.25))
+    # Not-Aus fires when composite_confidence < not_aus_confidence.
+    # Mapped: not_aus_threshold = 1 − not_aus_confidence (in σ_epist proxy space).
+    not_aus_conf      = float(kelly_params.get("not_aus_confidence", 0.20))
+    not_aus_threshold = max(0.0, 1.0 - not_aus_conf)
 
     # Pre-fetch rf rates once per region.
     regions  = universe_df["region"].unique().tolist()
@@ -263,19 +296,32 @@ def compute_kelly_weights(
         f_old              = get_last_kelly_fraction(conn, ticker)
         daily_vol          = estimate_daily_dollar_volume(ticker, conn, as_of_date)
 
+        # σ_epist proxy: low confidence → high epistemic uncertainty.
+        # composite_confidence ∈ [0.40, 1.0] after the confidence gate in composite.py.
+        # proxy ∈ [0.0, 0.60]; proxy = 0 means full confidence, proxy → 1 triggers Not-Aus.
+        comp_conf = row.get("composite_confidence", 1.0)
+        if pd.isna(comp_conf) or comp_conf <= 0:
+            comp_conf = 1.0
+        sigma_epist_proxy = max(0.0, 1.0 - comp_conf)
+
+        # Explicit Not-Aus check for logging (kelly_fraction enforces it internally too)
+        not_aus_fired = not_aus_threshold > 0 and sigma_epist_proxy >= not_aus_threshold
+        if not_aus_fired:
+            logger.warning(
+                "NOT-AUS: %s  composite_confidence=%.2f < %.2f threshold → f*=0",
+                ticker, comp_conf, not_aus_conf,
+            )
+
         f_adjusted, f_full = kelly_fraction(
             mu=mu, sigma=sigma, rf=rf, fraction=frac,
             f_old=f_old, aum=aum,
             daily_dollar_volume=daily_vol,
             impact_scaling=impact_scaling,
+            sigma_epist=sigma_epist_proxy,
+            lambda_epist=lambda_epist,
+            not_aus_threshold=not_aus_threshold,
         )
-
-        # σ_epist proxy: discount kelly by composite_confidence.
-        # Low confidence (sparse data) → smaller position.  confidence=1.0 → no change.
-        comp_conf = row.get("composite_confidence", 1.0)
-        if pd.isna(comp_conf) or comp_conf <= 0:
-            comp_conf = 1.0
-        f_epist = max(0.0, f_adjusted * comp_conf)
+        # f_adjusted already incorporates σ_epist via the objective (eq 12)
 
         w_max = compute_w_max(
             mu_robust=max(0.0, mu - rf),
@@ -286,17 +332,19 @@ def compute_kelly_weights(
         )
 
         rows.append({
-            "ticker":          ticker,
-            "mu_estimate":     round(mu, 4),
-            "sigma_estimate":  round(sigma, 4),
-            "rf_rate":         round(rf, 4),
-            "kelly_raw":       round(f_full, 4),   # full Kelly before fraction & epist
-            "kelly_25pct":     round(f_epist, 4),  # fraction-scaled + epist-discounted
-            "w_max_eur":       round(w_max, 0) if w_max > 0 else None,
-            "primary_bucket":  bucket,
-            "composite_score": row.get("composite_score"),
+            "ticker":               ticker,
+            "mu_estimate":          round(mu, 4),
+            "sigma_estimate":       round(sigma, 4),
+            "rf_rate":              round(rf, 4),
+            "kelly_raw":            round(f_full, 4),    # full Kelly before fraction
+            "kelly_25pct":          round(f_adjusted, 4),  # fraction-scaled + σ_epist-penalised
+            "w_max_eur":            round(w_max, 0) if w_max > 0 else None,
+            "primary_bucket":       bucket,
+            "composite_score":      row.get("composite_score"),
             "composite_confidence": round(comp_conf, 4),
-            "sigma_valid":     sigma_valid,
+            "sigma_epist":          round(sigma_epist_proxy, 4),
+            "not_aus":              not_aus_fired,
+            "sigma_valid":          sigma_valid,
         })
 
     return pd.DataFrame(rows)
