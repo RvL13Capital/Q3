@@ -278,10 +278,14 @@ def _chart_kelly_bars(portfolio: pd.DataFrame, scored_df: pd.DataFrame) -> Image
 
     merged = portfolio.copy()
     if not scored_df.empty and "kelly_25pct" in scored_df.columns:
+        kelly_cols = ["ticker", "kelly_25pct"]
+        if "kelly_raw" in scored_df.columns:
+            kelly_cols.append("kelly_raw")
+        rename_map = {"kelly_25pct": "k25_score"}
+        if "kelly_raw" in scored_df.columns:
+            rename_map["kelly_raw"] = "k_raw_score"
         merged = merged.merge(
-            scored_df[["ticker", "kelly_25pct", "kelly_raw"]].rename(
-                columns={"kelly_25pct": "k25_score", "kelly_raw": "k_raw_score"}
-            ),
+            scored_df[kelly_cols].rename(columns=rename_map),
             on="ticker", how="left"
         )
 
