@@ -77,6 +77,15 @@ def run_weekly_pipeline(
     universe = load_universe()
     logger.info(f"Universe loaded: {len(universe)} stocks")
 
+    # Bootstrap DB from committed CSV cache (no-op if DB already has fresh data)
+    from src.data.cache import sync_cache_to_db
+    cache_summary = sync_cache_to_db(conn)
+    if cache_summary["macro_rows"] > 0 or cache_summary["fundamentals_annual_rows"] > 0:
+        logger.info(
+            f"Cache bootstrap: +{cache_summary['macro_rows']} macro rows, "
+            f"+{cache_summary['fundamentals_annual_rows']} fundamental rows"
+        )
+
     # API keys from environment
     fred_api_key    = (os.getenv("FRED_API_KEY")  or "").strip() or None
     eodhd_api_key   = (os.getenv("EODHD_API_KEY") or "").strip() or None
