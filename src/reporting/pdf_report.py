@@ -13,7 +13,8 @@ from __future__ import annotations
 import io
 import logging
 import math
-from datetime import date as _date
+import math as _math
+from datetime import date as _date, timedelta as _timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -337,6 +338,180 @@ def _chart_usd_gauge(usd_index: float, usd_trend: str) -> Image:
             ha="center", fontsize=7.5, color=C["text"])
     ax.set_title("USD Strength", color=C["cyan"], fontsize=9, fontweight="bold")
     return _fig_to_image(fig, width_cm=5.5)
+
+
+def _chart_macro_trend(conn, params: dict, as_of_date: str) -> Image:
+    """Two-panel chart: PPIENG index (top) + rolling X_E signal (bottom), last 24 months."""
+    import matplotlib.dates as mdates
+    from src.data.db import get_macro_series
+
+    _phys        = params.get("physical", {})
+    series_id    = _phys.get("us_energy_ppi_series", "US_PPIENG")
+    ecs_lookback = _phys.get("ecs_lookback_months", 60)
+    ecs_crit     = _phys.get("ecs_crit_percentile", 0.70)
+    kappa        = _phys.get("eroei_kappa", 10.0)
+
+    # Fetch enough history to compute a stable rolling percentile (lookback + 24 months display)
+    fetch_start = (_date.fromisoformat(as_of_date)
+                   - _timedelta(days=(ecs_lookback + 26) * 31)).isoformat()
+    full_series = get_macro_series(conn, series_id, fetch_start, as_of_date)
+
+    _apply_mpl()
+    if full_series.empty or len(full_series) < 3:
+        fig, ax = plt.subplots(figsize=(10, 2.5))
+        ax.text(0.5, 0.5, f"{series_id} trend data unavailable",
+                ha="center", va="center", transform=ax.transAxes, color=C["muted"])
+        return _fig_to_image(fig, width_cm=14)
+
+    # Rolling percentile rank and X_E at each point
+    vals = full_series.values
+    ranks, xe_vals = [], []
+    for i in range(len(vals)):
+        window = vals[max(0, i - ecs_lookback + 1):i + 1]
+        rank = float(np.mean(window <= vals[i]))
+        xe   = 1.0 / (1.0 + _math.exp(kappa * (rank - ecs_crit)))
+        ranks.append(rank)
+        xe_vals.append(xe)
+
+    # Display last 24 months only
+    n_disp = min(24, len(full_series))
+    dates_disp = [d.to_pydatetime() if hasattr(d, "to_pydatetime") else d
+                  for d in full_series.index[-n_disp:]]
+    ppi_disp   = vals[-n_disp:]
+    xe_disp    = xe_vals[-n_disp:]
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 4.8), sharex=True,
+                                   gridspec_kw={"hspace": 0.08})
+    # ── PPIENG index ──
+    ax1.plot(dates_disp, ppi_disp, color=C["amber"], linewidth=1.8)
+    ax1.fill_between(dates_disp, ppi_disp, min(ppi_disp) * 0.98,
+                     alpha=0.15, color=C["amber"])
+    ax1.set_ylabel(f"{series_id} Index", fontsize=8, color=C["amber"])
+    ax1.tick_params(axis="y", colors=C["amber"])
+    ax1.set_title("Energy PPI Trend & EROEI Signal (X_E)", color=C["cyan"],
+                  fontsize=10, fontweight="bold", pad=6)
+
+    # ── X_E signal ──
+    ax2.plot(dates_disp, xe_disp, color=C["cyan"], linewidth=2.0)
+    ax2.axhline(0.5, color=C["amber"], linewidth=0.8, linestyle="--", alpha=0.7,
+                label="X_E = 0.50 (neutral)")
+    ax2.axhline(0.7, color=C["green"], linewidth=0.8, linestyle=":", alpha=0.7,
+                label="X_E = 0.70 (favourable)")
+    ax2.fill_between(dates_disp, xe_disp, 0.5,
+                     where=[v >= 0.5 for v in xe_disp], alpha=0.18, color=C["green"])
+    ax2.fill_between(dates_disp, xe_disp, 0.5,
+                     where=[v < 0.5 for v in xe_disp],  alpha=0.18, color=C["red"])
+    ax2.set_ylabel("X_E (EROEI)", fontsize=8)
+    ax2.set_ylim(0, 1.05)
+    ax2.legend(fontsize=7, framealpha=0.3, loc="upper left")
+
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%b '%y"))
+    ax2.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+    fig.autofmt_xdate(rotation=20, ha="right")
+    fig.tight_layout()
+    return _fig_to_image(fig, width_cm=14)
+
+
+def _build_signal_decomp_table(portfolio: pd.DataFrame,
+                                scored_df: pd.DataFrame) -> Table:
+    """Per-holding signal sub-component breakdown for Page 4."""
+    def _snr(v):
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return "—"
+        return f"{float(v):.1f}×"
+
+    def _delta(v, scale=100):
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return "—"
+        return f"{float(v)*scale:+.2f}"
+
+    headers = ["Ticker", "ROIC−WACC", "Margin SNR", "Inf.Conv.", "Autocorr Δ", "Abs.Δ", "ETF Corr"]
+    rows    = [headers]
+    style_cmds = list(_BASE_TABLE_STYLE)
+    score_map  = scored_df.set_index("ticker").to_dict("index") if not scored_df.empty else {}
+
+    for ri, (_, row) in enumerate(
+        portfolio.sort_values("weight", ascending=False).iterrows(), start=1
+    ):
+        t = row["ticker"]
+        s = score_map.get(t, {})
+        spread = s.get("roic_wacc_spread")
+        snr    = s.get("margin_snr")
+        conv   = s.get("inflation_convexity")
+        ac     = s.get("autocorr_delta")
+        ab     = s.get("absorption_delta")
+        etf    = s.get("etf_corr_score")
+
+        rows.append([
+            t,
+            f"{float(spread):.2%}" if spread is not None and not (isinstance(spread, float) and math.isnan(spread)) else "—",
+            _snr(snr),
+            _fmt_score(conv, 3),
+            _delta(ac),
+            _delta(ab),
+            _fmt_score(etf, 3),
+        ])
+        style_cmds.append(("FONTNAME", (0, ri), (0, ri), "Helvetica-Bold"))
+        style_cmds.append(("ALIGN",    (0, ri), (0, ri), "LEFT"))
+        style_cmds.append(("TEXTCOLOR", (0, ri), (0, ri), _hex("text")))
+        # Colour ROIC-WACC spread
+        if spread is not None and not (isinstance(spread, float) and math.isnan(spread)):
+            sc = C["green"] if float(spread) > 0.05 else (C["amber"] if float(spread) > 0 else C["red"])
+            style_cmds.append(("TEXTCOLOR", (1, ri), (1, ri), rl_colors.HexColor(sc)))
+
+    col_widths = [1.7*cm, 2.2*cm, 2.0*cm, 1.8*cm, 2.0*cm, 1.8*cm, 1.8*cm]
+    tbl = Table(rows, colWidths=col_widths, repeatRows=1)
+    tbl.setStyle(TableStyle(style_cmds))
+    return tbl
+
+
+def _build_near_miss_table(scored_df: pd.DataFrame, params: dict, n: int = 8) -> Table | None:
+    """Stocks that passed the confidence gate but missed entry — blocked by crowding or score."""
+    min_conf    = params["signals"]["min_composite_confidence"]
+    entry_thr   = params["signals"]["entry_threshold"]
+    crowd_max   = params["signals"]["crowding_entry_max"]
+
+    df = scored_df.dropna(subset=["composite_score"]).copy()
+    near = df[
+        (df["composite_confidence"] >= min_conf) &
+        (~df["entry_signal"].fillna(False)) &
+        (df["composite_score"] >= entry_thr * 0.5)
+    ].sort_values("composite_score", ascending=False).head(n)
+
+    if near.empty:
+        return None
+
+    def _blocked_by(row):
+        reasons = []
+        if row.get("crowding_score", 0) > crowd_max:
+            reasons.append("Crowding")
+        if row.get("composite_score", 0) < entry_thr:
+            reasons.append("Score")
+        return " + ".join(reasons) if reasons else "—"
+
+    headers   = ["Ticker", "Composite", "Quality", "Crowding", "Blocker"]
+    rows      = [headers]
+    style_cmds = list(_BASE_TABLE_STYLE)
+
+    for ri, (_, r) in enumerate(near.iterrows(), start=1):
+        blocker = _blocked_by(r)
+        rows.append([
+            r["ticker"],
+            _fmt_score(r.get("composite_score")),
+            _fmt_score(r.get("quality_score")),
+            _fmt_score(r.get("crowding_score")),
+            blocker,
+        ])
+        style_cmds.append(("FONTNAME", (0, ri), (0, ri), "Helvetica-Bold"))
+        style_cmds.append(("ALIGN",    (0, ri), (0, ri), "LEFT"))
+        style_cmds.append(("TEXTCOLOR", (0, ri), (0, ri), _hex("muted")))
+        block_color = C["amber"] if "Crowding" in blocker else C["red"]
+        style_cmds.append(("TEXTCOLOR", (4, ri), (4, ri), rl_colors.HexColor(block_color)))
+
+    col_widths = [2.0*cm, 2.0*cm, 2.0*cm, 2.0*cm, 3.5*cm]
+    tbl = Table(rows, colWidths=col_widths, repeatRows=1)
+    tbl.setStyle(TableStyle(style_cmds))
+    return tbl
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1035,6 +1210,19 @@ def generate_pdf_report(
                 _side_by_side(*radars, col_widths=[CONTENT_W/3]*3)
             )
             story.append(Spacer(1, 0.2*cm))
+
+        # Signal sub-component breakdown
+        story.append(Spacer(1, 0.4*cm))
+        story += _subsection("Signal Sub-Component Breakdown", styles)
+        story.append(Paragraph(
+            "ROIC−WACC: quality spread (hard gate at 0). "
+            "Margin SNR: gross-margin stability (higher = better). "
+            "Inf.Conv.: inflation anti-fragility (∂GM/∂PPI). "
+            "Autocorr Δ / Abs.Δ: Critical Slowing Down indicators.",
+            styles["muted"]
+        ))
+        story.append(Spacer(1, 0.2*cm))
+        story.append(_build_signal_decomp_table(portfolio, scored_df))
     else:
         story.append(Paragraph("No portfolio data for signal charts.", styles["muted"]))
 
@@ -1107,6 +1295,20 @@ def generate_pdf_report(
 
     if not scored_df.empty:
         story.append(_build_universe_table(scored_df, params))
+        # Near-miss panel
+        near_tbl = _build_near_miss_table(scored_df, params)
+        if near_tbl:
+            story.append(Spacer(1, 0.5*cm))
+            story += _subsection("Near Misses — High Score, Blocked from Entry", styles)
+            story.append(Paragraph(
+                "Stocks that passed the confidence gate (composite_confidence ≥ "
+                f"{params['signals']['min_composite_confidence']:.2f}) but are "
+                "not entry candidates. 'Crowding' = X_C above entry max; "
+                "'Score' = composite below entry threshold.",
+                styles["muted"]
+            ))
+            story.append(Spacer(1, 0.2*cm))
+            story.append(near_tbl)
     else:
         story.append(Paragraph("No scored universe data available.", styles["muted"]))
 
@@ -1182,8 +1384,59 @@ def generate_pdf_report(
     story.append(PageBreak())
     story += _section("Macro Context & Risk Parameters", styles)
 
-    story += _subsection("Risk-Free Rates", styles)
-    story.append(_build_macro_table(rf_us, rf_eu))
+    # Macro trend chart
+    story.append(_chart_macro_trend(conn, params, as_of_date))
+    story.append(Spacer(1, 0.4*cm))
+
+    story += _subsection("Risk-Free Rates & Macro Context", styles)
+
+    # Compute X_E current value and CA rate for context
+    try:
+        from src.data.macro import get_risk_free_rate as _grf
+        rf_ca = _grf(conn, "CA", as_of_date, params)
+    except Exception:
+        rf_ca = None
+
+    try:
+        from src.data.db import get_macro_series as _gms
+        import numpy as _np
+        _phys3    = params.get("physical", {})
+        _ecs_lkb  = _phys3.get("ecs_lookback_months", 60)
+        _ecs_crit = _phys3.get("ecs_crit_percentile", 0.70)
+        _kappa    = _phys3.get("eroei_kappa", 10.0)
+        _fetch_st = (_date.fromisoformat(as_of_date) - _timedelta(days=(_ecs_lkb+4)*31)).isoformat()
+        _ppi_s    = _gms(conn, _phys3.get("us_energy_ppi_series", "US_PPIENG"), _fetch_st, as_of_date)
+        _ppi_val  = float(_ppi_s.iloc[-1]) if not _ppi_s.empty else None
+        _pct_rank = float((_ppi_s <= _ppi_s.iloc[-1]).mean()) if not _ppi_s.empty else None
+        _x_e      = 1/(1+_math.exp(_kappa*(_pct_rank-_ecs_crit))) if _pct_rank is not None else None
+    except Exception:
+        _ppi_val, _pct_rank, _x_e = None, None, None
+
+    macro_rows = [
+        ["Region / Series", "Value", "Interpretation"],
+        ["US 10Y Risk-Free Rate",  f"{rf_us:.2%}",  "WACC baseline for US equity"],
+        ["EU 10Y Risk-Free Rate",  f"{rf_eu:.2%}",  "WACC baseline for EU equity"],
+        ["CA 10Y Risk-Free Rate",
+         f"{rf_ca:.2%}" if rf_ca is not None else "—",
+         "WACC baseline for CA equity"],
+        ["PPIENG (latest index)",
+         f"{_ppi_val:.1f}" if _ppi_val is not None else "—",
+         "US Energy Producer Price Index"],
+        ["PPIENG ECS percentile rank",
+         f"{_pct_rank:.0%}" if _pct_rank is not None else "—",
+         "Position in 5-year window (low = favourable)"],
+        ["X_E — EROEI logistic signal",
+         f"{_x_e:.3f}" if _x_e is not None else "—",
+         "1=max EROEI advantage, 0=energy-cost cliff"],
+    ]
+    m_style = list(_BASE_TABLE_STYLE)
+    m_style.append(("ALIGN", (2, 0), (2, -1), "LEFT"))
+    # Colour X_E row
+    if _x_e is not None:
+        m_style.append(("TEXTCOLOR", (1, 6), (1, 6), _rl_score_color(_x_e)))
+    m_tbl_macro = Table(macro_rows, colWidths=[4.5*cm, 3.0*cm, CONTENT_W - 7.5*cm], repeatRows=1)
+    m_tbl_macro.setStyle(TableStyle(m_style))
+    story.append(m_tbl_macro)
 
     story.append(Spacer(1, 0.5*cm))
     story += _subsection("Kelly & Constraint Parameters", styles)
