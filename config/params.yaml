@@ -77,6 +77,7 @@ data:
   fundamental_staleness_days: 90
   macro_staleness_days: 7
   trends_staleness_days: 7
+  fx_staleness_days: 1
   lookback_prices_days: 756     # ~3 years for vol/correlation calcs
   price_history_years: 5        # initial fetch on first run
 
@@ -116,6 +117,25 @@ market_indices:
   US: "SPY"
   CA: "SPY"
   EU: "EXW1.DE"
+
+fx:
+  # FX pairs fetched and stored in fx_rates table (yfinance convention)
+  pairs:
+    - "EURUSD=X"   # EUR/USD — primary EU↔US capital flow indicator
+    - "GBPUSD=X"   # GBP/USD — UK market exposure
+    - "USDCHF=X"   # USD/CHF — CHF safe-haven proxy (rising = USD stronger)
+    - "USDCAD=X"   # USD/CAD — CA portfolio FX exposure
+    - "USDJPY=X"   # USD/JPY — JPY safe-haven proxy (falling = risk-off)
+
+  # USD strength index: normalised [-1, +1]
+  # Values beyond ±neutral_band are called 'strengthening' or 'weakening'
+  usd_neutral_band: 0.15
+
+  # Safe-haven signal: JPY or CHF 1M log return below this → SAFE_HAVEN_BID flag
+  safe_haven_threshold: 0.02    # 2% 1M log return (magnitude)
+
+  # Sector/country flow score magnitude beyond this → labelled "strong" in implications
+  flow_strong_threshold: 0.40
 
 reporting:
   output_dir: "reports"
