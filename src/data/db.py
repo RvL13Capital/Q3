@@ -213,6 +213,8 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
 
     # Schema migrations: add new columns to existing DBs without losing data.
     for col_def in [
+        "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS autocorr_delta DOUBLE",
+        "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS absorption_delta DOUBLE",
         "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS etf_corr_score DOUBLE",
         "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS short_interest_score DOUBLE",
     ]:
