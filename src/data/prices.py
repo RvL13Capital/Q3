@@ -1,5 +1,6 @@
 """
-Price data fetcher: yfinance (primary) with EODHD fallback for EU stocks.
+Price data fetcher: yfinance (primary), Tiingo fallback for US stocks,
+EODHD fallback for EU stocks.
 Writes to DuckDB prices table. Respects staleness window from params.
 """
 import os
@@ -191,6 +192,79 @@ def fetch_prices_eodhd(
 
 
 # ---------------------------------------------------------------------------
+# Tiingo fetch (US stocks fallback)
+# ---------------------------------------------------------------------------
+
+TIINGO_BASE = "https://api.tiingo.com/tiingo/daily"
+
+
+def fetch_prices_tiingo(
+    tickers: list[str],
+    start_date: str,
+    end_date: str,
+    api_key: str,
+) -> pd.DataFrame:
+    """
+    Fetch EOD prices from Tiingo for a list of tickers.
+    Free tier covers US and some international stocks.
+    Returns long-format DataFrame matching prices table schema.
+    """
+    import requests
+
+    rows = []
+    headers = {"Content-Type": "application/json", "Authorization": f"Token {api_key}"}
+
+    for ticker in tickers:
+        # Tiingo uses plain US ticker symbols (no exchange suffix)
+        tiingo_ticker = ticker.split(".")[0].lower()
+        url = f"{TIINGO_BASE}/{tiingo_ticker}/prices"
+        params = {
+            "startDate": start_date,
+            "endDate": end_date,
+            "resampleFreq": "daily",
+            "token": api_key,
+        }
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=20)
+            if resp.status_code == 404:
+                logger.debug(f"Tiingo: {tiingo_ticker} not found (404)")
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            if not data:
+                continue
+
+            df = pd.DataFrame(data)
+            df["ticker"] = ticker
+            df = df.rename(columns={
+                "date": "date",
+                "open": "open",
+                "high": "high",
+                "low": "low",
+                "close": "close",
+                "adjClose": "adj_close",
+                "volume": "volume",
+            })
+            df["source"] = "tiingo"
+            df["currency"] = "USD"  # will be overridden per-stock
+            rows.append(df)
+        except Exception as e:
+            logger.warning(f"Tiingo fetch failed for {ticker}: {e}")
+
+    if not rows:
+        return pd.DataFrame()
+
+    result = pd.concat(rows, ignore_index=True)
+    result["date"] = pd.to_datetime(result["date"]).dt.date
+    keep = ["ticker", "date", "open", "high", "low", "close", "adj_close",
+            "volume", "currency", "source"]
+    for col in keep:
+        if col not in result.columns:
+            result[col] = None
+    return result[keep].dropna(subset=["adj_close"])
+
+
+# ---------------------------------------------------------------------------
 # Main update function
 # ---------------------------------------------------------------------------
 
@@ -201,6 +275,7 @@ def update_prices(
     extra_tickers: Optional[list[str]] = None,  # e.g. sector ETFs, market indices
     eodhd_api_key: Optional[str] = None,
     eodhd_api_keys: Optional[list[str]] = None,
+    tiingo_api_key: Optional[str] = None,
     force_refresh: bool = False,
 ) -> dict[str, str]:
     """
@@ -211,9 +286,10 @@ def update_prices(
       2. Determine fetch window (from last available date or full history).
       3. Try yfinance. For EU stocks without EODHD key, yfinance is fine for major
          exchanges (XETRA tickers like RHM.DE work with yfinance).
-      4. If yfinance returns empty AND eodhd_api_key available: try EODHD.
-      5. Assign currency from universe_df.
-      6. Upsert to DB.
+      4. If yfinance returns empty AND tiingo_api_key available: try Tiingo (US stocks).
+      5. If still empty AND eodhd_api_key available: try EODHD.
+      6. Assign currency from universe_df.
+      7. Upsert to DB.
 
     Returns dict: ticker -> status ('updated'|'cached'|'failed')
     """
@@ -275,7 +351,24 @@ def update_prices(
         logger.info(f"Fetching {len(group_tickers)} tickers from {start}")
         df = fetch_prices_yfinance(group_tickers, start, today)
 
-        # Per-ticker EODHD fallback: retry any ticker that got zero rows from yfinance
+        # Tiingo fallback: US stocks missing from yfinance response
+        if tiingo_api_key:
+            fetched_tickers = set(df["ticker"].unique()) if not df.empty else set()
+            # Only try Tiingo for tickers without an exchange suffix (US) or
+            # tickers whose region is US/CA in the universe
+            us_tickers_set = set(
+                universe_df.loc[universe_df["region"].isin(["US", "CA"]), "ticker"].tolist()
+            )
+            missing_us = [
+                t for t in group_tickers
+                if t not in fetched_tickers and (t in us_tickers_set or "." not in t)
+            ]
+            if missing_us:
+                tiingo_df = fetch_prices_tiingo(missing_us, start, today, tiingo_api_key)
+                if not tiingo_df.empty:
+                    df = pd.concat([df, tiingo_df], ignore_index=True) if not df.empty else tiingo_df
+
+        # Per-ticker EODHD fallback: retry any ticker that got zero rows from yfinance/Tiingo
         if eodhd_api_key:
             fetched_tickers = set(df["ticker"].unique()) if not df.empty else set()
             missing = [
