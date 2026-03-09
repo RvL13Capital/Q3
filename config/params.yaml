@@ -115,7 +115,7 @@ sector_etfs:
 # Broad market indices for relative strength calculation
 market_indices:
   US: "SPY"
-  CA: "SPY"
+  CA: "EWC"  # iShares MSCI Canada ETF — TSX proxy (was SPY, a US index)
   EU: "EXW1.DE"
 
 fx:

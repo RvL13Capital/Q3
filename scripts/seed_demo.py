@@ -231,6 +231,7 @@ def seed(as_of: date | None = None, verbose: bool = True) -> None:
     # Also seed sector ETF prices (needed by crowding ETF correlation)
     etf_seeds = [
         ("SPY",     220.0, 0.16, "USD"),
+        ("EWC",      35.0, 0.17, "USD"),   # iShares MSCI Canada ETF (TSX proxy)
         ("EXW1.DE",  80.0, 0.18, "EUR"),
         ("GRID",     25.0, 0.22, "USD"),
         ("URA",      25.0, 0.30, "USD"),
