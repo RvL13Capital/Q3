@@ -77,6 +77,16 @@ jobs:
           fi
           python src/main.py $ARGS
 
+      - name: Refresh CSV data cache
+        if: success()
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+          EODHD_API_KEY_2: ${{ secrets.EODHD_API_KEY_2 }}
+          DB_KEY: ${{ secrets.DBNOMICS_API_KEY }}
+        run: |
+          python scripts/refresh_cache.py --fundamentals --force
+
       - name: Export snapshots and commit
         if: success()
         run: |
@@ -84,7 +94,8 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add snapshots/
-          git diff --cached --quiet || git commit -m "chore: update dashboard snapshots [skip ci]"
+          git add data/cache/
+          git diff --cached --quiet || git commit -m "chore: update snapshots + data cache [skip ci]"
           git push origin HEAD:${{ github.ref_name }}
 
       - name: Save DB cache

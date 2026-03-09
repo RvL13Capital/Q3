@@ -1,4 +1,6 @@
-/data/
+/data/*.duckdb
+/data/*.db
+!/data/cache/
 .env
 __pycache__/
 *.pyc

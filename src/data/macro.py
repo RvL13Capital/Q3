@@ -272,6 +272,8 @@ def update_macro(
     staleness = params["data"]["macro_staleness_days"]
     start_date = (date.today() - timedelta(days=365 * 6)).isoformat()
 
+    from src.data.cache import write_macro_cache
+
     # ── US / CA series via FRED ──────────────────────────────────────────────
     if fred_api_key:
         for our_name, fred_id in FRED_SERIES.items():
@@ -287,6 +289,16 @@ def update_macro(
                 df = _fred_index_to_yoy(df)
             rows = upsert_macro(conn, our_name, df)
             log_fetch(conn, "macro", our_name, "success", rows_written=rows)
+            # Write to CSV cache so the repo stays up to date
+            try:
+                series = pd.Series(
+                    df["value"].values,
+                    index=pd.to_datetime(df["date"]).dt.date,
+                    name=our_name,
+                )
+                write_macro_cache(our_name, series)
+            except Exception as _ce:
+                logger.warning(f"cache write failed for {our_name}: {_ce}")
     else:
         logger.warning("No FRED_API_KEY provided; US/CA macro data will not be fetched")
 
@@ -305,6 +317,16 @@ def update_macro(
             continue
         rows = upsert_macro(conn, our_name, df)
         log_fetch(conn, "macro", our_name, "success", rows_written=rows)
+        # Write to CSV cache
+        try:
+            series = pd.Series(
+                df["value"].values,
+                index=pd.to_datetime(df["date"]).dt.date,
+                name=our_name,
+            )
+            write_macro_cache(our_name, series)
+        except Exception as _ce:
+            logger.warning(f"cache write failed for {our_name}: {_ce}")
 
 
 # ---------------------------------------------------------------------------
