@@ -193,13 +193,21 @@ def run_weekly_pipeline(
     # ── 5. Reporting ─────────────────────────────────────────────────────────
     logger.info("── Generating weekly report ──")
     from src.reporting.weekly_report import generate_weekly_report
+    from src.reporting.pdf_report    import generate_pdf_report
 
     report_path = generate_weekly_report(
         conn, actions, scored_df, params, as_of_date,
         flow_result=flow_result,
         output_dir=params["reporting"]["output_dir"],
     )
-    logger.info(f"Report saved: {report_path}")
+    logger.info(f"Markdown report saved: {report_path}")
+
+    pdf_path = generate_pdf_report(
+        conn, actions, scored_df, params, as_of_date,
+        flow_result=flow_result,
+        output_dir=params["reporting"]["output_dir"],
+    )
+    logger.info(f"PDF report saved: {pdf_path}")
 
     # ── Summary ──────────────────────────────────────────────────────────────
     elapsed = time.time() - start_time
@@ -226,7 +234,8 @@ def run_weekly_pipeline(
     else:
         print("\n✅ No action required this week.")
 
-    print(f"\nReport: {report_path}")
+    print(f"\nMarkdown: {report_path}")
+    print(f"PDF:      {pdf_path}")
     print("Dashboard: streamlit run src/reporting/dashboard.py")
 
     conn.close()
