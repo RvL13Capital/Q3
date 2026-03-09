@@ -157,7 +157,8 @@ def test_crowding_score_keys(conn, params):
     upsert_prices(conn, _make_prices("ETN"))
     result = compute_crowding_score("ETN", conn, params, AS_OF)
     for key in ["ticker", "crowding_score", "crowding_confidence",
-                "autocorr_delta", "absorption_delta"]:
+                "autocorr_delta", "absorption_delta",
+                "etf_corr_score", "short_interest_score"]:
         assert key in result, f"Missing key: {key}"
 
 
