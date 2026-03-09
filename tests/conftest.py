@@ -251,6 +251,7 @@ def params():
                 "trends_window_baseline": 90,
                 "etf_corr_window":      60,
                 "etf_corr_baseline":    120,
+                "etf_corr_max_delta":   0.30,
                 "short_interest_window": 30,
                 "short_interest_high":  0.25,
                 "short_interest_low":   0.05,

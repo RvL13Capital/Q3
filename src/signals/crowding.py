@@ -162,7 +162,9 @@ def compute_etf_correlation_score(
     etf_corr_window days, compared to a baseline period.
 
     Rising co-movement with the sector ETF = herd convergence = crowding signal.
-    Score: delta_corr in [-1, 1] → [0, 1] via (delta + 1) / 2.
+    Score: delta_corr / max_delta, clamped to [0, 1].
+    max_delta is the correlation increase considered fully crowded (default 0.30).
+    delta <= 0 (correlation falling or stable) → score = 0, no crowding signal.
     """
     from src.data.db import get_prices
     from src.data.prices import compute_log_returns
@@ -170,6 +172,7 @@ def compute_etf_correlation_score(
     w        = params["signals"]["crowding"]
     window   = int(w.get("etf_corr_window", 60))
     baseline = int(w.get("etf_corr_baseline", 120))
+    max_delta = float(w.get("etf_corr_max_delta", 0.30))
     total    = baseline + window + 30
 
     start = (datetime.strptime(as_of_date, "%Y-%m-%d")
@@ -204,7 +207,7 @@ def compute_etf_correlation_score(
         return 0.0, 0.0
 
     delta = (corr_current - corr_baseline) if not pd.isna(corr_baseline) else corr_current
-    score = max(0.0, min(1.0, (delta + 1.0) / 2.0))
+    score = max(0.0, min(1.0, delta / max(max_delta, 1e-9)))
     confidence = min(1.0, len(current_slice.dropna()) / window)
     return round(score, 4), round(confidence, 4)
 

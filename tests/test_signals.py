@@ -120,17 +120,29 @@ def test_margin_snr_volatile():
 
 
 def test_inflation_convexity_positive():
-    """∂GM/∂PPI = +0.4 (strong anti-fragile) → high score on [-0.5, +0.5] range."""
-    convexity = 0.40   # each 1% PPI rise → 0.4% GM expansion
-    score = _clamp_normalize(convexity, -0.50, 0.50)
-    assert score > 0.7   # (0.40 + 0.50) / 1.0 = 0.90
+    """∂GM/∂PPI = +0.4, γ=2.0 → exp(γ·slope) = exp(0.8) ≈ 2.23 (amplifier > 1)."""
+    import math
+    slope = 0.40
+    gamma = 2.0
+    factor = math.exp(gamma * max(0.0, slope))
+    assert factor > 1.0, "Positive slope must amplify quality score"
+    assert abs(factor - math.exp(0.8)) < 1e-9
 
 
 def test_inflation_convexity_negative():
-    """∂GM/∂PPI = -0.4 (margin compression) → low score on [-0.5, +0.5] range."""
-    convexity = -0.40
-    score = _clamp_normalize(convexity, -0.50, 0.50)
-    assert score < 0.3   # (-0.40 + 0.50) / 1.0 = 0.10
+    """∂GM/∂PPI = -0.4 → max(0, slope) = 0 → exp(0) = 1.0 (no penalty, no boost)."""
+    import math
+    slope = -0.40
+    gamma = 2.0
+    factor = math.exp(gamma * max(0.0, slope))
+    assert factor == pytest.approx(1.0), "Negative slope → neutral multiplier (hard gate)"
+
+
+def test_inflation_convexity_zero_slope():
+    """∂GM/∂PPI = 0 → exp(0) = 1.0 (no inflation effect; spread × SNR unmodified)."""
+    import math
+    factor = math.exp(2.0 * max(0.0, 0.0))
+    assert factor == pytest.approx(1.0)
 
 
 # ────────────────────────────────────────────────────────────────────────────

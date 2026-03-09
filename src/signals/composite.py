@@ -108,6 +108,8 @@ def compute_composite_score(
         "crowding_confidence":  c_conf,
         "autocorr_delta":       crowding.get("autocorr_delta"),
         "absorption_delta":     crowding.get("absorption_delta"),
+        "etf_corr_score":       crowding.get("etf_corr_score"),
+        "short_interest_score": crowding.get("short_interest_score"),
         "composite_score":      round(composite, 4) if not pd.isna(composite) else None,
         "composite_confidence": round(comp_conf, 4),
         "mu_estimate":          round(mu_estimate, 4) if mu_estimate is not None else None,

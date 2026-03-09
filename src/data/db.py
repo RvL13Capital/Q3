@@ -144,6 +144,8 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
             crowding_confidence DOUBLE,
             autocorr_delta      DOUBLE,
             absorption_delta    DOUBLE,
+            etf_corr_score      DOUBLE,
+            short_interest_score DOUBLE,
             composite_score     DOUBLE,
             composite_confidence DOUBLE,
             mu_estimate         DOUBLE,
@@ -197,6 +199,16 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("""
         CREATE SEQUENCE IF NOT EXISTS fetch_log_seq START 1
     """)
+
+    # Schema migrations: add new columns to existing DBs without losing data.
+    for col_def in [
+        "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS etf_corr_score DOUBLE",
+        "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS short_interest_score DOUBLE",
+    ]:
+        try:
+            conn.execute(col_def)
+        except Exception:
+            pass  # DuckDB < 0.10 may not support IF NOT EXISTS on ALTER
 
 
 # ---------------------------------------------------------------------------
@@ -458,7 +470,7 @@ _SIGNAL_SCORE_COLS = [
     "ticker", "score_date", "physical_raw", "physical_norm", "physical_confidence",
     "quality_score", "quality_confidence", "roic_wacc_spread", "margin_snr",
     "inflation_convexity", "crowding_score", "crowding_confidence",
-    "autocorr_delta", "absorption_delta",
+    "autocorr_delta", "absorption_delta", "etf_corr_score", "short_interest_score",
     "composite_score", "composite_confidence",
     "mu_estimate", "sigma_estimate", "kelly_fraction", "kelly_25pct",
     "entry_signal", "exit_signal",
