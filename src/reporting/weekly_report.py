@@ -38,12 +38,33 @@ def _traffic_light(crowding_score: Optional[float], params: dict) -> str:
     return "🟢"
 
 
+def _fmt_ret(val, decimals: int = 2) -> str:
+    if val is None or pd.isna(val):
+        return "—"
+    return f"{val * 100:+.{decimals}f}%"
+
+
+def _flow_arrow(score: Optional[float]) -> str:
+    if score is None or pd.isna(score):
+        return "⚪"
+    if score > 0.30:
+        return "🟢▲"
+    if score > 0.10:
+        return "🟢"
+    if score < -0.30:
+        return "🔴▼"
+    if score < -0.10:
+        return "🔴"
+    return "⚪"
+
+
 def generate_weekly_report(
     conn,
     actions: dict,
     scored_df: pd.DataFrame,
     params: dict,
     as_of_date: str,
+    flow_result: Optional[dict] = None,
     output_dir: str = "reports",
 ) -> str:
     """
@@ -206,6 +227,76 @@ def generate_weekly_report(
         f"| EU     | {rf_eu:.2%} |",
         "",
     ]
+
+    # ── 7. FX & Capital Flows ────────────────────────────────────────────────
+    if flow_result:
+        lines += ["## FX & Capital Flows", ""]
+
+        usd_trend = flow_result.get("usd_trend", "neutral")
+        usd_index = flow_result.get("usd_index", 0.0)
+        trend_icon = {"strengthening": "📈", "weakening": "📉", "neutral": "➡️"}.get(usd_trend, "➡️")
+        lines += [
+            f"**USD Trend:** {trend_icon} {usd_trend.capitalize()} (index = {usd_index:+.2f})",
+            "",
+        ]
+
+        # FX pair table
+        fx_df = flow_result.get("fx_momentum", pd.DataFrame())
+        if not fx_df.empty:
+            lines += ["### FX Rates — Momentum", ""]
+            lines += ["| Pair | 1M | 3M | 12M |"]
+            lines += ["|------|----|----|----|"]
+            for _, row in fx_df.iterrows():
+                lines.append(
+                    f"| {row['pair']} "
+                    f"| {_fmt_ret(row.get('return_1m'))} "
+                    f"| {_fmt_ret(row.get('return_3m'))} "
+                    f"| {_fmt_ret(row.get('return_12m'))} |"
+                )
+            lines.append("")
+
+        # Country flows
+        country_flows = flow_result.get("country_flows", pd.DataFrame())
+        if not country_flows.empty:
+            lines += ["### Country Capital Flows (EUR-adjusted)", ""]
+            lines += ["| Region | Index | 4W EUR | 13W EUR | Flow |"]
+            lines += ["|--------|-------|--------|---------|------|"]
+            for _, row in country_flows.iterrows():
+                lines.append(
+                    f"| {row['region']} "
+                    f"| {row.get('broad_index', '—')} "
+                    f"| {_fmt_ret(row.get('eur_ret_4w'))} "
+                    f"| {_fmt_ret(row.get('eur_ret_13w'))} "
+                    f"| {_flow_arrow(row.get('flow_score'))} {row.get('flow_direction', '—')} |"
+                )
+            lines.append("")
+
+        # Sector flows
+        sector_flows = flow_result.get("sector_flows", pd.DataFrame())
+        if not sector_flows.empty:
+            lines += ["### Sector Capital Flows", ""]
+            lines += ["| Region | Sector | ETF | Local 4W | EUR 4W | FX Contrib | vs Mkt 4W | Flow |"]
+            lines += ["|--------|--------|-----|----------|--------|------------|-----------|------|"]
+            for _, row in sector_flows.sort_values("flow_score", ascending=False).iterrows():
+                lines.append(
+                    f"| {row['region']} "
+                    f"| {row['bucket']} "
+                    f"| {row['etf_ticker']} "
+                    f"| {_fmt_ret(row.get('local_ret_4w'))} "
+                    f"| {_fmt_ret(row.get('usd_ret_4w'))} "
+                    f"| {_fmt_ret(row.get('fx_contrib_4w'))} "
+                    f"| {_fmt_ret(row.get('vs_market_4w'))} "
+                    f"| {_flow_arrow(row.get('flow_score'))} |"
+                )
+            lines.append("")
+
+        # Implications
+        implications = flow_result.get("implications", [])
+        if implications:
+            lines += ["### Portfolio Implications", ""]
+            for impl in implications:
+                lines.append(f"- {impl}")
+            lines.append("")
 
     # ── Footer ────────────────────────────────────────────────────────────────
     lines += [

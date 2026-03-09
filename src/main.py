@@ -137,6 +137,15 @@ def run_weekly_pipeline(
             force_refresh=force_refresh,
         )
 
+        logger.info("── Fetching FX rates ──")
+        from src.data.fx import update_fx_rates
+
+        update_fx_rates(
+            conn, params,
+            tiingo_api_key=tiingo_api_key,
+            force_refresh=force_refresh,
+        )
+
         if fetch_trends:
             logger.info("── Fetching Google Trends ──")
             from src.signals.crowding import fetch_google_trends_batch
@@ -175,12 +184,19 @@ def run_weekly_pipeline(
         if sigma_map:
             scored_df["sigma_estimate"] = scored_df["ticker"].map(sigma_map)
 
+    # ── 4.5 Capital Flow Analysis ─────────────────────────────────────────────
+    logger.info("── Running FX & capital flow analysis ──")
+    from src.signals.fx_flows import compute_capital_flows
+
+    flow_result = compute_capital_flows(conn, universe, params, as_of_date)
+
     # ── 5. Reporting ─────────────────────────────────────────────────────────
     logger.info("── Generating weekly report ──")
     from src.reporting.weekly_report import generate_weekly_report
 
     report_path = generate_weekly_report(
         conn, actions, scored_df, params, as_of_date,
+        flow_result=flow_result,
         output_dir=params["reporting"]["output_dir"],
     )
     logger.info(f"Report saved: {report_path}")

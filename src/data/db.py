@@ -185,6 +185,17 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
     """)
 
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS fx_rates (
+            pair        VARCHAR NOT NULL,
+            date        DATE NOT NULL,
+            rate        DOUBLE NOT NULL,
+            source      VARCHAR NOT NULL,
+            fetched_at  TIMESTAMP DEFAULT current_timestamp,
+            PRIMARY KEY (pair, date)
+        )
+    """)
+
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS fetch_log (
             id          INTEGER,
             fetch_date  TIMESTAMP DEFAULT current_timestamp,
@@ -594,6 +605,62 @@ def is_stale(
         return last_fetch < cutoff
     except Exception:
         return True
+
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# FX helpers
+# ---------------------------------------------------------------------------
+
+def upsert_fx_rates(conn: duckdb.DuckDBPyConnection, df: pd.DataFrame) -> int:
+    """df must have columns: pair, date, rate, source."""
+    if df.empty:
+        return 0
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+    df = df[["pair", "date", "rate", "source"]]
+    conn.execute("""
+        INSERT OR REPLACE INTO fx_rates (pair, date, rate, source)
+        SELECT pair, date, rate, source FROM df
+    """)
+    return len(df)
+
+
+def get_fx_rates(
+    conn: duckdb.DuckDBPyConnection,
+    pairs: list[str],
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """Return wide-format DataFrame: index=date, columns=pairs."""
+    pairs_str = ", ".join(f"'{p}'" for p in pairs)
+    df = conn.execute(f"""
+        SELECT pair, date, rate
+        FROM fx_rates
+        WHERE pair IN ({pairs_str})
+          AND date BETWEEN '{start_date}' AND '{end_date}'
+        ORDER BY date
+    """).df()
+    if df.empty:
+        return pd.DataFrame()
+    return df.pivot(index="date", columns="pair", values="rate")
+
+
+def get_latest_fx_rate(
+    conn: duckdb.DuckDBPyConnection,
+    pair: str,
+    as_of_date: str,
+) -> Optional[float]:
+    """Return most recent FX rate on or before as_of_date."""
+    result = conn.execute("""
+        SELECT rate FROM fx_rates
+        WHERE pair = ? AND date <= ?
+        ORDER BY date DESC LIMIT 1
+    """, [pair, as_of_date]).fetchone()
+    return result[0] if result else None
 
 
 # ---------------------------------------------------------------------------
