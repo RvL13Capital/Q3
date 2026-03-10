@@ -138,6 +138,41 @@ def test_kelly_lambda_epist_scale():
     assert f_high < f_low
 
 
+def test_kelly_zero_turnover_no_phantom_impact():
+    """
+    Scale-alignment invariant (regression for the f_old dimension bug):
+
+    When the previous fraction-scaled weight (f_old = kelly_25pct) already equals
+    the target weight (fraction × f_full), turnover is zero and the impact term
+    must vanish.  The result must therefore be identical to the no-impact baseline.
+
+    Concretely: fraction=0.25, f_full≈1.222, f_adjusted≈0.306.
+    If f_old=0.306 (matching the target weight), impact cost should be 0 and
+    the returned fraction must equal the baseline (no AUM) result.
+
+    Before the fix, turnover = |f_full - f_old| = |1.222 - 0.306| ≈ 0.916
+    (phantom turnover), causing the optimizer to suppress f* artificially.
+    After the fix, turnover = |f_full × fraction - f_old| = |0.306 - 0.306| = 0.
+    """
+    fraction = 0.25
+    mu, sigma, rf = 0.15, 0.30, 0.04
+
+    # Compute baseline (no impact) to know the exact target weight.
+    f_baseline, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=fraction)
+
+    # Set f_old equal to the target weight — zero true turnover.
+    f_with_impact, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=fraction,
+        f_old=f_baseline,
+        aum=1_000_000,
+        daily_dollar_volume=1_000_000,  # sqrt_wv = 1.0 → non-trivial impact term
+        impact_scaling=1.0,
+    )
+
+    # With zero turnover, impact = 0 → result must match the no-impact baseline.
+    assert f_with_impact == pytest.approx(f_baseline, abs=1e-4)
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Portfolio construction constraint tests
 # ────────────────────────────────────────────────────────────────────────────

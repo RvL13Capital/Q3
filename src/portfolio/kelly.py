@@ -13,7 +13,7 @@ Full objective (eq 12 — Robust Kelly):
   c        = impact_scaling (≈1.0, dimensionless)
   W        = AUM in currency units (params: kelly.aum_eur)
   V        = average daily dollar volume (last 60 days)
-  f_old    = last Kelly fraction for this ticker (from portfolio_snapshots)
+  f_old    = previous fraction-scaled portfolio weight for this ticker (kelly_25pct from portfolio_snapshots)
   σ_epist  = epistemic uncertainty proxy (from Deep Ensembles, Phase 3;
              currently derived as 1 − composite_confidence)
   λ        = lambda_epist penalty coefficient (params: kelly.lambda_epist)
@@ -199,7 +199,10 @@ def kelly_fraction(
 
     def neg_objective(f: float) -> float:
         growth   = mu_eff * f - 0.5 * sigma_sq_total * f ** 2
-        turnover = abs(f - f_old)
+        # f is in full-Kelly space; f_old is the previous fraction-scaled weight
+        # (kelly_25pct). Project f onto weight space before computing turnover so
+        # that the impact penalty reflects the actual portfolio weight change.
+        turnover = abs(f * fraction - f_old)
         impact   = impact_scaling * sigma * (turnover ** 1.5) * sqrt_wv
         return -(growth - impact)
 
