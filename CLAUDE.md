@@ -236,6 +236,11 @@ Eq 12 — Robust Kelly — Complete Objective:
 - `− ½ · σ²_alea · f²` — σ²_epist term: lightweight proxy via `composite_confidence`
 - `− c · σ_alea · |f − f_old|^1.5 · √(W/V)` — fully implemented
 
+**Impact term convention:** In the optimizer, `f` is in full-Kelly space and `f_old` is the
+previous fraction-scaled portfolio weight (`kelly_25pct`). Turnover is computed as
+`|f × fraction − f_old|` to compare in the same weight space. This ensures zero impact
+penalty when the position is unchanged.
+
 **Not yet implemented:** λ·σ_epist·f linear penalty term (requires true σ_epist from Deep Ensembles).
 
 #### Four Emergent System Properties
@@ -249,8 +254,8 @@ Eq 12 — Robust Kelly — Complete Objective:
 
 `kelly_fraction()` returns `(f_adjusted, f_full)`:
 - `f_full` = unconstrained optimizer output stored as `kelly_raw` (diagnostic)
-- `f_adjusted` = `fraction × f_full`, clamped to [0, 1]
-- `kelly_25pct` = `f_adjusted × composite_confidence` (current σ_epist proxy)
+- `f_adjusted` = `fraction × f_full`, clamped to [0, 1]; stored as `kelly_25pct`
+  (σ_epist penalty is folded into the objective, not applied post-hoc)
 
 ---
 

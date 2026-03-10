@@ -285,7 +285,9 @@ class TestConstructPortfolio:
     def test_portfolio_persisted(self, conn, sample_universe, all_prices, params):
         upsert_prices(conn, all_prices)
         _insert_macro(conn, params)
-        scored = _make_scored_df(("ETN", 0.72, True))
+        # mu=0.40 ensures Kelly weight stays above min_position even with
+        # the epistemic penalty (λ·σ_epist) and market-impact term active.
+        scored = _make_scored_df(("ETN", 0.72, True, 0.25, 0.75, 0.40))
         construct_portfolio(conn, scored, sample_universe, params, AS_OF)
         portfolio = get_latest_portfolio(conn)
         assert not portfolio.empty
