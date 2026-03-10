@@ -232,6 +232,7 @@ def params():
             "impact_scaling":     1.0,
             "lambda_epist":       0.25,       # eq 12 epistemic penalty coefficient
             "not_aus_confidence": 0.20,       # composite_confidence < this → Not-Aus
+            "eta_participation":  0.50,       # Almgren-Chriss participation-rate penalty η
         },
         "signals": {
             "entry_threshold":           0.30,

@@ -174,6 +174,76 @@ def test_kelly_zero_turnover_no_phantom_impact():
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Almgren-Chriss participation penalty tests
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_participation_penalty_reduces_allocation():
+    """
+    With eta_participation > 0 and finite AUM/ADV, the optimizer allocates
+    less than the no-participation baseline (endogenous liquidity avoidance).
+    """
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    aum = 50_000_000
+    adv = 10_000_000  # position would be 5× daily volume → very illiquid
+
+    f_baseline, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+                                   eta_participation=0.0,
+                                   aum=aum, daily_dollar_volume=adv)
+    f_penalized, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+                                    eta_participation=0.50,
+                                    aum=aum, daily_dollar_volume=adv)
+
+    assert f_penalized < f_baseline
+    assert f_penalized > 0  # still positive (not killed entirely)
+
+
+def test_participation_penalty_zero_eta_no_effect():
+    """When eta_participation=0, result is identical to eta-absent baseline
+    (both still include turnover impact if AUM/ADV are set)."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    aum, adv = 50_000_000, 10_000_000
+    # Both calls include AUM/ADV so turnover impact is present in both.
+    f_absent, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+                                 aum=aum, daily_dollar_volume=adv)
+    f_zero_eta, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+                                   eta_participation=0.0,
+                                   aum=aum, daily_dollar_volume=adv)
+    assert f_zero_eta == pytest.approx(f_absent, abs=1e-6)
+
+
+def test_participation_penalty_scales_with_illiquidity():
+    """More illiquid (lower ADV) → larger penalty → lower allocation."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    aum = 50_000_000
+    eta = 0.50
+
+    f_liquid, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+                                 eta_participation=eta,
+                                 aum=aum, daily_dollar_volume=100_000_000)  # very liquid
+    f_illiquid, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+                                   eta_participation=eta,
+                                   aum=aum, daily_dollar_volume=5_000_000)  # illiquid
+
+    assert f_illiquid < f_liquid
+
+
+def test_participation_penalty_higher_eta_lower_allocation():
+    """Higher η → stronger penalty → lower allocation."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    aum = 50_000_000
+    adv = 20_000_000
+
+    f_low_eta, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+                                  eta_participation=0.10,
+                                  aum=aum, daily_dollar_volume=adv)
+    f_high_eta, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+                                   eta_participation=1.0,
+                                   aum=aum, daily_dollar_volume=adv)
+
+    assert f_high_eta < f_low_eta
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Portfolio construction constraint tests
 # ────────────────────────────────────────────────────────────────────────────
 

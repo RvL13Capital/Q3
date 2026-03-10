@@ -11,6 +11,11 @@ kelly:
   # σ_epist proxy = 1 − composite_confidence  (Phase 3: replace with Deep Ensemble σ_epist)
   lambda_epist: 0.25        # λ: linear epistemic penalty coefficient (calibrated to 1−confidence proxy; replace with true scale when Deep Ensembles land)
   not_aus_confidence: 0.20  # composite_confidence < this → Not-Aus → f* = 0 instantly
+  # Almgren-Chriss participation-rate penalty (endogenous slippage):
+  # η · σ · √(f·fraction·AUM/ADV) penalises steady-state participation rate,
+  # causing the optimizer to organically avoid illiquid names before hitting
+  # the hard 10%/25% ADV boundaries.  0.0 = disabled (conservative default).
+  eta_participation: 0.50   # η: participation impact coefficient (calibrate to fund's execution quality)
 
 signals:
   # Composite formula is multiplicative: X_E × X_P × (1 - X_C)

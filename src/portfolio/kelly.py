@@ -151,24 +151,31 @@ def kelly_fraction(
     sigma_epist: float = 0.0,
     lambda_epist: float = 0.25,
     not_aus_threshold: float = 0.0,
+    eta_participation: float = 0.0,
 ) -> tuple[float, float]:
     """
     Optimise the eq 12 Kelly objective with epistemic penalty and market impact.
 
     Parameters
     ----------
-    sigma_epist       : epistemic uncertainty proxy [0, ∞).  Derived from
-                        composite_confidence as (1 − confidence) until Deep
-                        Ensembles are implemented (Module III).
-    lambda_epist      : linear penalty coefficient λ for the σ_epist term.
-    not_aus_threshold : σ_epist ≥ this → f* = 0 (Not-Aus).  0 = disabled.
+    sigma_epist        : epistemic uncertainty proxy [0, ∞).  Derived from
+                         composite_confidence as (1 − confidence) until Deep
+                         Ensembles are implemented (Module III).
+    lambda_epist       : linear penalty coefficient λ for the σ_epist term.
+    not_aus_threshold  : σ_epist ≥ this → f* = 0 (Not-Aus).  0 = disabled.
+    eta_participation  : Almgren-Chriss participation-rate penalty coefficient.
+                         When > 0, adds an endogenous slippage term
+                         ``η · σ · √(f·fraction·AUM / ADV)`` that reduces the
+                         effective return for illiquid names, causing the
+                         optimizer to organically curve away from positions that
+                         consume a large share of daily volume.
 
     Returns (f_adjusted, f_full) where:
       f_full     = unconstrained optimiser solution (full Kelly, pre-fraction)
       f_adjusted = fraction × f_full, clamped to [0, 1]
 
-    Degrades gracefully: when sigma_epist=0 the result is identical to the
-    pre-Module-III behaviour.
+    Degrades gracefully: when sigma_epist=0 and eta_participation=0 the result
+    is identical to the pre-enhancement behaviour.
     """
     # ── Not-Aus gate (σ_epist → ∞ ⟹ f* = 0) ────────────────────────────────
     if not_aus_threshold > 0 and sigma_epist >= not_aus_threshold:
@@ -199,6 +206,12 @@ def kelly_fraction(
         f_adjusted = float(max(0.0, min(1.0, fraction * f_full)))
         return f_adjusted, f_full
 
+    # ── Almgren-Chriss participation-rate constants ──────────────────────────
+    if eta_participation > 0 and daily_dollar_volume > 0 and aum > 0:
+        _participation_coeff = eta_participation * sigma * np.sqrt(fraction * aum / daily_dollar_volume)
+    else:
+        _participation_coeff = 0.0
+
     def neg_objective(f: float) -> float:
         growth   = mu_eff * f - 0.5 * sigma_sq_total * f ** 2
         # f is in full-Kelly space; f_old is the previous fraction-scaled weight
@@ -206,7 +219,11 @@ def kelly_fraction(
         # that the impact penalty reflects the actual portfolio weight change.
         turnover = abs(f * fraction - f_old)
         impact   = impact_scaling * sigma * (turnover ** 1.5) * sqrt_wv
-        return -(growth - impact)
+        # Almgren-Chriss endogenous slippage: η·σ·√(f·fraction·AUM/ADV)·f
+        # penalises steady-state participation rate, not just turnover.
+        # Factored as: _participation_coeff · √f · f  (since √(f·K) = √f·√K).
+        participation = _participation_coeff * np.sqrt(max(f, 0.0)) * f if _participation_coeff > 0 else 0.0
+        return -(growth - impact - participation)
 
     # Optimise over [0, 1/fraction] so fraction scaling is consistent with
     # classic fractional Kelly when impact and σ_epist are negligible.
@@ -293,11 +310,12 @@ def compute_kelly_weights(
     if candidates.empty:
         return pd.DataFrame()
 
-    kelly_params    = params["kelly"]
-    frac            = kelly_params["fraction"]
-    aum             = float(kelly_params.get("aum_eur", 0.0))
-    impact_scaling  = float(kelly_params.get("impact_scaling", 1.0))
-    lambda_epist    = float(kelly_params.get("lambda_epist", 0.25))
+    kelly_params       = params["kelly"]
+    frac               = kelly_params["fraction"]
+    aum                = float(kelly_params.get("aum_eur", 0.0))
+    impact_scaling     = float(kelly_params.get("impact_scaling", 1.0))
+    lambda_epist       = float(kelly_params.get("lambda_epist", 0.25))
+    eta_participation  = float(kelly_params.get("eta_participation", 0.0))
     # Not-Aus fires when composite_confidence < not_aus_confidence.
     # Mapped: not_aus_threshold = 1 − not_aus_confidence (in σ_epist proxy space).
     not_aus_conf      = float(kelly_params.get("not_aus_confidence", 0.20))
@@ -347,6 +365,7 @@ def compute_kelly_weights(
             sigma_epist=sigma_epist_proxy,
             lambda_epist=lambda_epist,
             not_aus_threshold=not_aus_threshold,
+            eta_participation=eta_participation,
         )
         # f_adjusted already incorporates σ_epist via the objective (eq 12)
 
