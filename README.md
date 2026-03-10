@@ -65,7 +65,7 @@ config/
   universe.yaml            # ~180 tickers across 6 megatrend buckets
   params.yaml              # signal weights, Kelly params, staleness thresholds
 
-tests/                     # 358 tests across 13 test files (pytest)
+tests/                     # 357 tests across 13 test files (pytest)
 ```
 
 ---
@@ -113,5 +113,5 @@ Without `EODHD_API_KEY` the pipeline falls back to yfinance for all data.
 ## Tests
 
 ```bash
-pytest tests/ -q          # 358 tests, ~22s
+pytest tests/ -q          # 357 tests, ~22s
 ```
