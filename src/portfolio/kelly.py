@@ -179,6 +179,8 @@ def kelly_fraction(
 
     # ── Total variance (aleatoric + epistemic) ───────────────────────────────
     sigma_sq_total = sigma ** 2 + sigma_epist ** 2
+    # Numerical stability: floor prevents division by near-zero variance
+    sigma_sq_total = max(sigma_sq_total, 1e-10)
 
     # ── Effective excess return after linear epistemic penalty ───────────────
     mu_eff = (mu - rf) - lambda_epist * sigma_epist
@@ -243,6 +245,28 @@ def compute_w_max(
     if denominator < 1e-10:
         return 0.0
     return float(daily_dollar_volume * (mu_robust / denominator) ** 2)
+
+
+# ---------------------------------------------------------------------------
+# ADV liquidity fraction (market impact diagnostic)
+# ---------------------------------------------------------------------------
+
+def compute_adv_fraction(
+    weight: float,
+    aum: float,
+    daily_dollar_volume: float,
+) -> Optional[float]:
+    """
+    Fraction of Average Daily Volume consumed by this position.
+    Returns None if ADV data unavailable.
+
+    Positions consuming >10% of ADV indicate market impact risk beyond
+    what the Kelly impact term captures (slippage during execution).
+    """
+    if aum <= 0 or daily_dollar_volume <= 0 or weight <= 0:
+        return None
+    position_dollars = weight * aum
+    return position_dollars / daily_dollar_volume
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +358,15 @@ def compute_kelly_weights(
             impact_scaling=impact_scaling,
         )
 
+        # ADV liquidity diagnostic: flag positions consuming >10% of daily volume
+        adv_frac = compute_adv_fraction(f_adjusted, aum, daily_vol)
+        if adv_frac is not None and adv_frac > 0.10:
+            logger.warning(
+                "ADV_LIQUIDITY: %s  position=%.1f%% of ADV (%.1f%% of AUM × €%.0fM ADV) "
+                "— execution slippage risk",
+                ticker, adv_frac * 100, f_adjusted * 100, daily_vol / 1e6,
+            )
+
         rows.append({
             "ticker":               ticker,
             "mu_estimate":          round(mu, 4),
@@ -342,6 +375,7 @@ def compute_kelly_weights(
             "kelly_raw":            round(f_full, 4),    # full Kelly before fraction
             "kelly_25pct":          round(f_adjusted, 4),  # fraction-scaled + σ_epist-penalised
             "w_max_eur":            round(w_max, 0) if w_max > 0 else None,
+            "adv_fraction":         round(adv_frac, 4) if adv_frac is not None else None,
             "primary_bucket":       bucket,
             "composite_score":      row.get("composite_score"),
             "composite_confidence": round(comp_conf, 4),

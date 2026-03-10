@@ -100,6 +100,22 @@ def check_exit_signals(
             if bucket_w > max_bucket:
                 reasons.append(f"BUCKET_DRIFT ({bucket} at {bucket_w:.1%} > {max_bucket:.1%})")
 
+        # Trigger 6: ADV liquidity breach — position exceeds 25% of daily volume
+        # This flags illiquid positions where execution slippage would erode alpha.
+        aum = float(params["kelly"].get("aum_eur", 0))
+        if aum > 0 and weight > 0:
+            from src.portfolio.kelly import estimate_daily_dollar_volume
+            try:
+                daily_vol = estimate_daily_dollar_volume(ticker, conn, as_of_date)
+                if daily_vol > 0:
+                    adv_frac = (weight * aum) / daily_vol
+                    if adv_frac > 0.25:
+                        reasons.append(
+                            f"ADV_LIQUIDITY ({adv_frac:.1%} of daily volume — execution risk)"
+                        )
+            except Exception:
+                pass  # volume data unavailable — skip this check
+
         rows.append({
             "ticker":          ticker,
             "exit_triggered":  len(reasons) > 0,
