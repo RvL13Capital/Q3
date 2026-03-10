@@ -562,3 +562,44 @@ class TestBitemporalSchema:
         # so both versions coexist. Then this query should return 3.1 (original).
         val_pre = get_macro_value(conn, "CPI_REV", "2024-02-01", bitemporal=True)
         assert val_pre is None  # expected: original destroyed by overwrite
+
+    def test_fundamentals_null_report_date_falls_back_to_fetched_at(self, conn):
+        """Rows with NULL report_date (e.g. yfinance) use fetched_at as t_k fallback."""
+        # Insert a row without report_date — fetched_at is set automatically by DEFAULT
+        conn.execute("""
+            INSERT INTO fundamentals_annual
+                (ticker, fiscal_year, revenue, gross_profit, gross_margin,
+                 invested_capital, nopat, roic, effective_tax_rate,
+                 currency, accounting_std, source)
+            VALUES ('NORP', 2023, 1e9, 4e8, 0.40, 2e9, 1.2e8, 0.06, 0.21,
+                    'USD', 'GAAP', 'yfinance')
+        """)
+        # fetched_at defaults to current_timestamp (~2026-03-10), report_date is NULL
+        # Query as_of far future: should include the row (fetched_at < 2099)
+        result = get_latest_fundamentals(conn, "NORP", n_years=5, as_of_date="2030-01-01")
+        assert len(result) == 1
+        assert result.iloc[0]["fiscal_year"] == 2023
+
+        # Query as_of before fetched_at: should exclude (fetched_at > 2024)
+        result_old = get_latest_fundamentals(conn, "NORP", n_years=5, as_of_date="2024-01-01")
+        assert len(result_old) == 0
+
+    def test_margin_history_null_report_date_uses_fetched_at(self, conn):
+        """Margin history with NULL report_date falls back to fetched_at."""
+        for fy in [2021, 2022, 2023]:
+            conn.execute("""
+                INSERT INTO fundamentals_annual
+                    (ticker, fiscal_year, gross_margin, revenue, gross_profit,
+                     invested_capital, nopat, roic, effective_tax_rate,
+                     currency, accounting_std, source)
+                VALUES ('MFAT', ?, 0.35, 1e9, 3.5e8, 2e9, 1e8, 0.05, 0.21,
+                        'USD', 'GAAP', 'yfinance')
+            """, [fy])
+
+        # fetched_at is now (~2026), so as_of="2030" should include all 3
+        result = get_margin_history(conn, "MFAT", n_years=5, as_of_date="2030-01-01")
+        assert len(result) == 3
+
+        # as_of="2024" should exclude all (fetched_at > 2024)
+        result_old = get_margin_history(conn, "MFAT", n_years=5, as_of_date="2024-01-01")
+        assert len(result_old) == 0

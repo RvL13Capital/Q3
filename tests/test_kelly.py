@@ -243,6 +243,40 @@ def test_participation_penalty_higher_eta_lower_allocation():
     assert f_high_eta < f_low_eta
 
 
+def test_participation_penalty_adv_zero_disabled():
+    """When ADV=0, participation penalty is disabled (coefficient = 0)."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    # With ADV=0, participation cannot be computed → same as no penalty
+    f_no_adv, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+                                 eta_participation=0.50,
+                                 aum=50_000_000, daily_dollar_volume=0.0)
+    f_base, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25)
+    assert f_no_adv == pytest.approx(f_base, abs=1e-6)
+
+
+def test_participation_penalty_not_aus_dominates():
+    """Not-Aus gate fires before participation penalty is evaluated."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    f, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+                          eta_participation=0.50,
+                          aum=50_000_000, daily_dollar_volume=10_000_000,
+                          sigma_epist=0.90, not_aus_threshold=0.80)
+    assert f == 0.0  # Not-Aus overrides everything
+
+
+def test_participation_penalty_with_nonzero_f_old():
+    """Participation penalty and turnover impact coexist correctly with f_old > 0."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    aum, adv = 50_000_000, 20_000_000
+
+    # With f_old > 0, both turnover impact and participation are active
+    f_with_folds, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+                                     f_old=0.05, eta_participation=0.50,
+                                     aum=aum, daily_dollar_volume=adv)
+    # Should still produce a positive, bounded result
+    assert 0 < f_with_folds < 1
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Portfolio construction constraint tests
 # ────────────────────────────────────────────────────────────────────────────

@@ -375,7 +375,7 @@ def get_latest_fundamentals(
             SELECT *
             FROM fundamentals_annual
             WHERE ticker = ?
-              AND COALESCE(t_k, report_date, DATE '2099-12-31') <= ?
+              AND COALESCE(t_k, report_date, fetched_at, DATE '2099-12-31') <= ?
             ORDER BY fiscal_year DESC
             LIMIT ?
         """, [ticker, as_of_date, n_years]).df()
@@ -406,7 +406,7 @@ def get_margin_history(
     Sorted ascending by fiscal_year (oldest first, required by diff() callers).
     """
     if as_of_date:
-        tk_clause = "AND COALESCE(t_k, report_date, DATE '2099-12-31') <= ?"
+        tk_clause = "AND COALESCE(t_k, report_date, fetched_at, DATE '2099-12-31') <= ?"
         annual_params = [ticker, as_of_date, n_years]
     else:
         tk_clause = ""
@@ -425,7 +425,7 @@ def get_margin_history(
 
     # Supplement with quarterly data
     if as_of_date:
-        q_tk_clause = "AND COALESCE(t_k, report_date, DATE '2099-12-31') <= ?"
+        q_tk_clause = "AND COALESCE(t_k, report_date, fetched_at, DATE '2099-12-31') <= ?"
         q_params = [ticker, as_of_date, n_years]
     else:
         q_tk_clause = ""
@@ -492,7 +492,7 @@ def get_macro_value(
 ) -> Optional[float]:
     """Return the most recent macro value on or before as_of_date.
 
-    When *bitemporal* is True (default), also filters by ``t_k <= as_of_date``
+    When *bitemporal* is True, also filters by ``t_k <= as_of_date``
     so that revised macro figures not yet published at as_of_date are excluded.
     This prevents look-ahead bias from economic data restatements (CPI, NFP,
     GDP revisions).

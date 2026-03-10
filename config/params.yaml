@@ -16,6 +16,7 @@ kelly:
   # causing the optimizer to organically avoid illiquid names before hitting
   # the hard 10%/25% ADV boundaries.  0.0 = disabled (conservative default).
   eta_participation: 0.50   # η: participation impact coefficient (calibrate to fund's execution quality)
+  adv_exit_threshold: 0.25  # exit trigger: position > 25% of ADV → "Roach Motel" risk
 
 signals:
   # Composite formula is multiplicative: X_E × X_P × (1 - X_C)

@@ -47,16 +47,16 @@ src/
     prices.py              # yfinance / EODHD price fetcher
     fundamentals.py        # EODHD fundamentals fetcher
     macro.py               # FRED macro series fetcher
-    db.py                  # DuckDB schema + upsert helpers
+    db.py                  # DuckDB schema + upsert helpers + bitemporal t_k queries
   signals/
     physical.py            # price momentum, breakout, volume signals
     quality.py             # ROIC/WACC spread, margin SNR, earnings convexity
     crowding.py            # ETF correlation, short interest, rel. strength, Google Trends
     composite.py           # weighted composite score + entry/exit flags
   portfolio/
-    kelly.py               # Kelly fraction + sigma estimation
+    kelly.py               # Kelly fraction + sigma estimation + Almgren-Chriss slippage
     construction.py        # weight optimisation, constraints, snapshot persistence
-    monitor.py             # exit checks, entry checks, weekly action summary
+    monitor.py             # exit checks (6 triggers), entry checks, weekly action summary
   reporting/
     weekly_report.py       # Markdown report generation
     dashboard.py           # Streamlit dashboard
@@ -65,7 +65,7 @@ config/
   universe.yaml            # ~180 tickers across 6 megatrend buckets
   params.yaml              # signal weights, Kelly params, staleness thresholds
 
-tests/                     # 357 tests across 13 test files (pytest)
+tests/                     # 374 tests across 13 test files (pytest)
 ```
 
 ---
@@ -74,11 +74,13 @@ tests/                     # 357 tests across 13 test files (pytest)
 
 | Step | Module | What it produces |
 |------|--------|-----------------|
-| Physical | `signals/physical.py` | Momentum, breakout, volume score [0–1] |
-| Quality | `signals/quality.py` | ROIC spread, margin SNR, convexity score [0–1] |
-| Crowding | `signals/crowding.py` | ETF corr + short interest + rel. strength + trends [0–1] |
-| Composite | `signals/composite.py` | Weighted sum; entry if > 0.55 and crowding < 0.40 |
-| Portfolio | `portfolio/construction.py` | Fractional Kelly weights, 8% position cap, 35% bucket cap, 10% cash floor |
+| Physical | `signals/physical.py` | EROEI logistic damper X_E [0–1] (eq 4) |
+| Quality | `signals/quality.py` | Moat score X_P: ROIC spread × margin SNR × convexity [0–1] (eq 5) |
+| Crowding | `signals/crowding.py` | CSD index X_C: autocorr + absorption ratio [+ trends] [0–1] (eq 6) |
+| Composite | `signals/composite.py` | X_E × X_P × (1−X_C); entry if > 0.30 and crowding < 0.40 (eq 7) |
+| Portfolio | `portfolio/kelly.py` | Robust Kelly sizing with Almgren-Chriss participation penalty (eq 12) |
+| Constraints | `portfolio/construction.py` | 8% position cap, 35% bucket cap, AUM ceiling, 10% cash floor |
+| Monitor | `portfolio/monitor.py` | 6 exit triggers incl. ADV liquidity breach |
 
 ---
 
@@ -113,5 +115,5 @@ Without `EODHD_API_KEY` the pipeline falls back to yfinance for all data.
 ## Tests
 
 ```bash
-pytest tests/ -q          # 357 tests, ~22s
+pytest tests/ -q          # 374 tests, ~10s
 ```
