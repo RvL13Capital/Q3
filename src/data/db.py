@@ -216,16 +216,40 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
     """)
 
     # Schema migrations: add new columns to existing DBs without losing data.
-    for col_def in [
+    _migrations = [
         "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS autocorr_delta DOUBLE",
         "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS absorption_delta DOUBLE",
         "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS etf_corr_score DOUBLE",
         "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS short_interest_score DOUBLE",
-    ]:
+        # ── Bitemporal t_k (knowledge time) columns ───────────────────────────
+        # t_k = microsecond-exact timestamp when data became publicly available.
+        # For prices: t_k ≈ market close + settlement delay.
+        # For fundamentals: t_k = SEC filing / earnings release timestamp.
+        # For macro: t_k = statistical agency publication timestamp.
+        # Backfilled from fetched_at for legacy rows.
+        "ALTER TABLE prices ADD COLUMN IF NOT EXISTS t_k TIMESTAMP",
+        "ALTER TABLE fundamentals_annual ADD COLUMN IF NOT EXISTS t_k TIMESTAMP",
+        "ALTER TABLE fundamentals_quarterly ADD COLUMN IF NOT EXISTS t_k TIMESTAMP",
+        "ALTER TABLE macro_series ADD COLUMN IF NOT EXISTS t_k TIMESTAMP",
+    ]
+    for col_def in _migrations:
         try:
             conn.execute(col_def)
         except Exception as exc:
             _log.warning("Schema migration failed (non-fatal): %s — %s", col_def, exc)
+
+    # Backfill t_k from fetched_at where not yet set.
+    for tbl in ["prices", "macro_series"]:
+        try:
+            conn.execute(f"UPDATE {tbl} SET t_k = fetched_at WHERE t_k IS NULL AND fetched_at IS NOT NULL")
+        except Exception:
+            pass
+    # Fundamentals: prefer report_date as t_k (closer to actual publication).
+    for tbl in ["fundamentals_annual", "fundamentals_quarterly"]:
+        try:
+            conn.execute(f"UPDATE {tbl} SET t_k = COALESCE(report_date, fetched_at) WHERE t_k IS NULL")
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -337,8 +361,24 @@ def get_latest_fundamentals(
     conn: duckdb.DuckDBPyConnection,
     ticker: str,
     n_years: int = 5,
+    as_of_date: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Return up to n_years of annual fundamental rows for ticker, newest first."""
+    """Return up to n_years of annual fundamental rows for ticker, newest first.
+
+    When *as_of_date* is provided, only rows whose knowledge time (t_k) is on
+    or before that date are returned — this prevents look-ahead bias from
+    unreleased filings.  Falls back to ``report_date <= as_of_date`` when t_k
+    is NULL (legacy rows without bitemporal metadata).
+    """
+    if as_of_date:
+        return conn.execute("""
+            SELECT *
+            FROM fundamentals_annual
+            WHERE ticker = ?
+              AND COALESCE(t_k, report_date, DATE '2099-12-31') <= ?
+            ORDER BY fiscal_year DESC
+            LIMIT ?
+        """, [ticker, as_of_date, n_years]).df()
     return conn.execute("""
         SELECT *
         FROM fundamentals_annual
@@ -352,35 +392,53 @@ def get_margin_history(
     conn: duckdb.DuckDBPyConnection,
     ticker: str,
     n_years: int = 5,
+    as_of_date: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Return gross_margin history for use in margin-stability and inflation-convexity
     calculations. Prefers annual data; supplements with quarterly data (averaged
     per fiscal year) when fewer than 3 annual rows are available.
 
+    When *as_of_date* is provided, only rows whose knowledge time (t_k) is on
+    or before that date are returned — bitemporal look-ahead protection.
+
     Returns DataFrame with columns: fiscal_year, gross_margin.
     Sorted ascending by fiscal_year (oldest first, required by diff() callers).
     """
-    annual = conn.execute("""
+    if as_of_date:
+        tk_clause = "AND COALESCE(t_k, report_date, DATE '2099-12-31') <= ?"
+        annual_params = [ticker, as_of_date, n_years]
+    else:
+        tk_clause = ""
+        annual_params = [ticker, n_years]
+
+    annual = conn.execute(f"""
         SELECT fiscal_year, gross_margin
         FROM fundamentals_annual
-        WHERE ticker = ? AND gross_margin IS NOT NULL
+        WHERE ticker = ? AND gross_margin IS NOT NULL {tk_clause}
         ORDER BY fiscal_year DESC
         LIMIT ?
-    """, [ticker, n_years]).df()
+    """, annual_params).df()
 
     if len(annual) >= 3:
         return annual.sort_values("fiscal_year").reset_index(drop=True)
 
     # Supplement with quarterly data
-    quarterly = conn.execute("""
+    if as_of_date:
+        q_tk_clause = "AND COALESCE(t_k, report_date, DATE '2099-12-31') <= ?"
+        q_params = [ticker, as_of_date, n_years]
+    else:
+        q_tk_clause = ""
+        q_params = [ticker, n_years]
+
+    quarterly = conn.execute(f"""
         SELECT fiscal_year, AVG(gross_margin) AS gross_margin
         FROM fundamentals_quarterly
-        WHERE ticker = ? AND gross_margin IS NOT NULL
+        WHERE ticker = ? AND gross_margin IS NOT NULL {q_tk_clause}
         GROUP BY fiscal_year
         ORDER BY fiscal_year DESC
         LIMIT ?
-    """, [ticker, n_years]).df()
+    """, q_params).df()
 
     if quarterly.empty:
         return annual.sort_values("fiscal_year").reset_index(drop=True)
@@ -397,7 +455,12 @@ def get_margin_history(
 # ---------------------------------------------------------------------------
 
 def upsert_macro(conn: duckdb.DuckDBPyConnection, series_id: str, df: pd.DataFrame) -> int:
-    """df must have columns: date, value, source. Optional: unit."""
+    """df must have columns: date, value, source. Optional: unit, t_k.
+
+    When ``t_k`` is present in the DataFrame, it is stored as the knowledge
+    time (publication timestamp).  Otherwise t_k defaults to ``fetched_at``
+    via the schema-level backfill.
+    """
     if df.empty:
         return 0
     df = df.copy()
@@ -405,11 +468,19 @@ def upsert_macro(conn: duckdb.DuckDBPyConnection, series_id: str, df: pd.DataFra
     df["date"] = pd.to_datetime(df["date"]).dt.date
     if "unit" not in df.columns:
         df["unit"] = None
-    df = df[["series_id", "date", "value", "unit", "source"]]
-    conn.execute("""
-        INSERT OR REPLACE INTO macro_series (series_id, date, value, unit, source)
-        SELECT series_id, date, value, unit, source FROM df
-    """)
+    if "t_k" in df.columns:
+        df["t_k"] = pd.to_datetime(df["t_k"])
+        df = df[["series_id", "date", "value", "unit", "source", "t_k"]]
+        conn.execute("""
+            INSERT OR REPLACE INTO macro_series (series_id, date, value, unit, source, t_k)
+            SELECT series_id, date, value, unit, source, t_k FROM df
+        """)
+    else:
+        df = df[["series_id", "date", "value", "unit", "source"]]
+        conn.execute("""
+            INSERT OR REPLACE INTO macro_series (series_id, date, value, unit, source)
+            SELECT series_id, date, value, unit, source FROM df
+        """)
     return len(df)
 
 
@@ -417,13 +488,28 @@ def get_macro_value(
     conn: duckdb.DuckDBPyConnection,
     series_id: str,
     as_of_date: str,
+    bitemporal: bool = False,
 ) -> Optional[float]:
-    """Return the most recent macro value on or before as_of_date."""
-    result = conn.execute("""
-        SELECT value FROM macro_series
-        WHERE series_id = ? AND date <= ?
-        ORDER BY date DESC LIMIT 1
-    """, [series_id, as_of_date]).fetchone()
+    """Return the most recent macro value on or before as_of_date.
+
+    When *bitemporal* is True (default), also filters by ``t_k <= as_of_date``
+    so that revised macro figures not yet published at as_of_date are excluded.
+    This prevents look-ahead bias from economic data restatements (CPI, NFP,
+    GDP revisions).
+    """
+    if bitemporal:
+        result = conn.execute("""
+            SELECT value FROM macro_series
+            WHERE series_id = ? AND date <= ?
+              AND COALESCE(t_k, fetched_at, DATE '2099-12-31') <= ?
+            ORDER BY date DESC LIMIT 1
+        """, [series_id, as_of_date, as_of_date]).fetchone()
+    else:
+        result = conn.execute("""
+            SELECT value FROM macro_series
+            WHERE series_id = ? AND date <= ?
+            ORDER BY date DESC LIMIT 1
+        """, [series_id, as_of_date]).fetchone()
     return result[0] if result else None
 
 
@@ -432,13 +518,27 @@ def get_macro_series(
     series_id: str,
     start_date: str,
     end_date: str,
+    as_of_tk: Optional[str] = None,
 ) -> pd.Series:
-    """Return macro time series as pd.Series indexed by date."""
-    df = conn.execute("""
-        SELECT date, value FROM macro_series
-        WHERE series_id = ? AND date BETWEEN ? AND ?
-        ORDER BY date
-    """, [series_id, start_date, end_date]).df()
+    """Return macro time series as pd.Series indexed by date.
+
+    When *as_of_tk* is provided, only observations whose knowledge time
+    ``t_k <= as_of_tk`` are returned (bitemporal filter to prevent
+    look-ahead from revised releases).
+    """
+    if as_of_tk:
+        df = conn.execute("""
+            SELECT date, value FROM macro_series
+            WHERE series_id = ? AND date BETWEEN ? AND ?
+              AND COALESCE(t_k, fetched_at, DATE '2099-12-31') <= ?
+            ORDER BY date
+        """, [series_id, start_date, end_date, as_of_tk]).df()
+    else:
+        df = conn.execute("""
+            SELECT date, value FROM macro_series
+            WHERE series_id = ? AND date BETWEEN ? AND ?
+            ORDER BY date
+        """, [series_id, start_date, end_date]).df()
     if df.empty:
         return pd.Series(dtype=float)
     return df.set_index("date")["value"]

@@ -59,7 +59,7 @@ def compute_roic_wacc_spread(
     from src.data.db import get_latest_fundamentals
     from src.data.macro import get_risk_free_rate
 
-    df = get_latest_fundamentals(conn, ticker, n_years=1)
+    df = get_latest_fundamentals(conn, ticker, n_years=1, as_of_date=as_of_date)
     if df.empty or df["roic"].isna().all():
         return float("nan"), 0.0
 
@@ -89,6 +89,7 @@ def compute_margin_snr(
     ticker: str,
     conn,
     params: dict,
+    as_of_date: str | None = None,
 ) -> tuple[float, float, float]:
     """
     Returns (snr, normalized_score, confidence).
@@ -99,7 +100,7 @@ def compute_margin_snr(
     from src.data.db import get_margin_history
 
     lookback = params["signals"]["quality"].get("lookback_years", 5)
-    df = get_margin_history(conn, ticker, n_years=lookback)
+    df = get_margin_history(conn, ticker, n_years=lookback, as_of_date=as_of_date)
 
     if df.empty:
         return float("nan"), 0.5, 0.0
@@ -151,7 +152,7 @@ def compute_inflation_convexity(
     from src.data.db import get_margin_history
     from src.data.macro import get_inflation_yoy
 
-    df = get_margin_history(conn, ticker, n_years=lookback_years + 1)
+    df = get_margin_history(conn, ticker, n_years=lookback_years + 1, as_of_date=as_of_date)
     if df.empty:
         return float("nan"), 0.0
 
@@ -229,7 +230,7 @@ def compute_quality_score(
     spread, roic_conf = compute_roic_wacc_spread(
         ticker, conn, params, as_of_date, region, rf_cache=rf_cache
     )
-    snr, margin_score, margin_conf = compute_margin_snr(ticker, conn, params)
+    snr, margin_score, margin_conf = compute_margin_snr(ticker, conn, params, as_of_date=as_of_date)
     convexity, conv_conf = compute_inflation_convexity(
         ticker, conn, params, as_of_date, region
     )

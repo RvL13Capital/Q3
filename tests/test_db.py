@@ -376,3 +376,189 @@ def test_log_fetch_multiple(conn):
         "SELECT count(*) FROM fetch_log WHERE module='macro'"
     ).fetchone()[0]
     assert count == 5
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Bitemporal t_k tests
+# ────────────────────────────────────────────────────────────────────────────
+
+from src.data.db import get_margin_history
+
+
+class TestBitemporalSchema:
+    """Verify bitemporal t_k column and query filtering."""
+
+    def test_t_k_column_exists_after_schema_init(self, conn):
+        """Schema migration adds t_k to all bitemporal tables."""
+        for table in ["prices", "fundamentals_annual", "fundamentals_quarterly", "macro_series"]:
+            cols = conn.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table}'").df()
+            assert "t_k" in cols["column_name"].values, f"t_k missing from {table}"
+
+    def test_macro_upsert_stores_explicit_t_k(self, conn):
+        """When DataFrame includes t_k, it is stored in the DB."""
+        df = pd.DataFrame({
+            "date": ["2024-01-15", "2024-02-15"],
+            "value": [4.0, 4.1],
+            "source": "fred",
+            "t_k": ["2024-01-20 09:00:00", "2024-02-20 09:00:00"],
+        })
+        upsert_macro(conn, "TEST_TK", df)
+        result = conn.execute(
+            "SELECT t_k FROM macro_series WHERE series_id = 'TEST_TK' ORDER BY date"
+        ).df()
+        assert result["t_k"].notna().all()
+        assert len(result) == 2
+
+    def test_get_macro_value_bitemporal_excludes_future_knowledge(self, conn):
+        """With bitemporal=True, data with t_k after as_of_date is invisible."""
+        df = pd.DataFrame({
+            "date": ["2024-01-15", "2024-02-15"],
+            "value": [4.0, 4.5],
+            "source": "fred",
+            "t_k": ["2024-01-20", "2024-02-20"],
+        })
+        upsert_macro(conn, "BT_RF", df)
+
+        # As of Jan 25: should see Jan data (t_k=Jan 20) but not Feb (t_k=Feb 20)
+        val = get_macro_value(conn, "BT_RF", "2024-01-25", bitemporal=True)
+        assert val == pytest.approx(4.0)
+
+        # As of Mar 1: both visible
+        val_full = get_macro_value(conn, "BT_RF", "2024-03-01", bitemporal=True)
+        assert val_full == pytest.approx(4.5)
+
+    def test_get_macro_value_bitemporal_false_ignores_t_k(self, conn):
+        """Default bitemporal=False preserves backward-compatible behavior."""
+        df = pd.DataFrame({
+            "date": ["2024-01-15"],
+            "value": [3.9],
+            "source": "fred",
+            "t_k": ["2026-01-01"],  # far future t_k
+        })
+        upsert_macro(conn, "BT_COMPAT", df)
+        val = get_macro_value(conn, "BT_COMPAT", "2024-06-01", bitemporal=False)
+        assert val == pytest.approx(3.9)
+
+    def test_get_macro_series_as_of_tk_filters(self, conn):
+        """as_of_tk parameter filters out not-yet-published observations."""
+        df = pd.DataFrame({
+            "date": ["2024-01-15", "2024-02-15", "2024-03-15"],
+            "value": [1.0, 2.0, 3.0],
+            "source": "fred",
+            "t_k": ["2024-01-20", "2024-02-20", "2024-03-20"],
+        })
+        upsert_macro(conn, "BT_SERIES", df)
+
+        # Without as_of_tk: all 3 visible
+        full = get_macro_series(conn, "BT_SERIES", "2024-01-01", "2024-12-31")
+        assert len(full) == 3
+
+        # With as_of_tk=Feb 25: only first 2 visible
+        partial = get_macro_series(conn, "BT_SERIES", "2024-01-01", "2024-12-31",
+                                   as_of_tk="2024-02-25")
+        assert len(partial) == 2
+        assert partial.iloc[-1] == pytest.approx(2.0)
+
+    def test_get_latest_fundamentals_as_of_date_filters(self, conn):
+        """Fundamentals with future report_date are excluded when as_of_date set."""
+        rows = []
+        for fy, rd in [(2022, "2023-03-01"), (2023, "2024-03-01"), (2024, "2025-03-01")]:
+            rows.append({
+                "ticker": "BTX",
+                "fiscal_year": fy,
+                "report_date": rd,
+                "revenue": 1e9,
+                "gross_profit": 4e8,
+                "ebit": 1.5e8,
+                "net_income": 1e8,
+                "total_equity": 2e9,
+                "total_debt": 5e8,
+                "cash": 2e8,
+                "goodwill": 1e8,
+                "gross_margin": 0.40,
+                "invested_capital": 2.2e9,
+                "nopat": 1.2e8,
+                "roic": 0.055,
+                "effective_tax_rate": 0.21,
+                "currency": "USD",
+                "accounting_std": "GAAP",
+                "source": "test",
+            })
+        df = pd.DataFrame(rows)
+        upsert_fundamentals_annual(conn, df)
+
+        # As of mid-2024: FY2022 + FY2023 visible, FY2024 not yet filed
+        result = get_latest_fundamentals(conn, "BTX", n_years=5, as_of_date="2024-06-15")
+        assert len(result) == 2
+        assert set(result["fiscal_year"].tolist()) == {2022, 2023}
+
+        # Without as_of_date: all 3 visible (backward compat)
+        result_all = get_latest_fundamentals(conn, "BTX", n_years=5)
+        assert len(result_all) == 3
+
+    def test_get_margin_history_as_of_date_filters(self, conn):
+        """Margin history respects bitemporal as_of_date."""
+        rows = []
+        for fy, rd in [(2021, "2022-03-15"), (2022, "2023-03-15"), (2023, "2024-03-15")]:
+            rows.append({
+                "ticker": "MHIST",
+                "fiscal_year": fy,
+                "report_date": rd,
+                "revenue": 1e9,
+                "gross_profit": fy * 1e6,
+                "gross_margin": 0.35 + (fy - 2021) * 0.01,
+                "ebit": 1e8,
+                "net_income": 7e7,
+                "total_equity": 1e9,
+                "total_debt": 3e8,
+                "cash": 1e8,
+                "goodwill": 5e7,
+                "invested_capital": 1.15e9,
+                "nopat": 8e7,
+                "roic": 0.07,
+                "effective_tax_rate": 0.21,
+                "currency": "USD",
+                "accounting_std": "GAAP",
+                "source": "test",
+            })
+        df = pd.DataFrame(rows)
+        upsert_fundamentals_annual(conn, df)
+
+        # As of Feb 2024: FY2023 not yet filed (report_date=2024-03-15)
+        result = get_margin_history(conn, "MHIST", n_years=5, as_of_date="2024-02-01")
+        assert len(result) == 2
+        assert 2023 not in result["fiscal_year"].tolist()
+
+    def test_ghost_state_macro_revision(self, conn):
+        """Macro revision: same date, different t_k → latest-known-at-query-time wins."""
+        # Initial release: CPI = 3.1% published on Jan 20
+        df1 = pd.DataFrame({
+            "date": ["2024-01-15"],
+            "value": [3.1],
+            "source": "fred",
+            "t_k": ["2024-01-20"],
+        })
+        upsert_macro(conn, "CPI_REV", df1)
+
+        # Revision: same date, CPI revised to 3.3% published on Feb 15
+        df2 = pd.DataFrame({
+            "date": ["2024-01-15"],
+            "value": [3.3],
+            "source": "fred",
+            "t_k": ["2024-02-15"],
+        })
+        upsert_macro(conn, "CPI_REV", df2)
+
+        # After revision: shows revised value (INSERT OR REPLACE overwrites)
+        val = get_macro_value(conn, "CPI_REV", "2024-03-01", bitemporal=True)
+        assert val == pytest.approx(3.3)
+
+        # Before revision published: t_k filter correctly excludes revised value.
+        # With current INSERT OR REPLACE, the original row (t_k=Jan 20) is
+        # overwritten by the revision (t_k=Feb 15). So querying before Feb 15
+        # returns None — the original value is lost.
+        #
+        # Phase 2.5 TODO: migrate to append-only ghost states (PK includes t_k)
+        # so both versions coexist. Then this query should return 3.1 (original).
+        val_pre = get_macro_value(conn, "CPI_REV", "2024-02-01", bitemporal=True)
+        assert val_pre is None  # expected: original destroyed by overwrite
