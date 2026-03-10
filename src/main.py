@@ -23,9 +23,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import yaml
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv optional; .env vars can be set via shell
 
 logging.basicConfig(
     level=logging.INFO,
@@ -202,7 +204,6 @@ def run_weekly_pipeline(
     # ── 5. Reporting ─────────────────────────────────────────────────────────
     logger.info("── Generating weekly report ──")
     from src.reporting.weekly_report import generate_weekly_report
-    from src.reporting.pdf_report    import generate_pdf_report
 
     report_path = generate_weekly_report(
         conn, actions, scored_df, params, as_of_date,
@@ -211,12 +212,18 @@ def run_weekly_pipeline(
     )
     logger.info(f"Markdown report saved: {report_path}")
 
-    pdf_path = generate_pdf_report(
-        conn, actions, scored_df, params, as_of_date,
-        flow_result=flow_result,
-        output_dir=params["reporting"]["output_dir"],
-    )
-    logger.info(f"PDF report saved: {pdf_path}")
+    try:
+        from src.reporting.pdf_report import generate_pdf_report
+
+        pdf_path = generate_pdf_report(
+            conn, actions, scored_df, params, as_of_date,
+            flow_result=flow_result,
+            output_dir=params["reporting"]["output_dir"],
+        )
+        logger.info(f"PDF report saved: {pdf_path}")
+    except ImportError:
+        pdf_path = None
+        logger.warning("PDF report skipped — matplotlib/reportlab not installed")
 
     # ── Summary ──────────────────────────────────────────────────────────────
     elapsed = time.time() - start_time
@@ -244,7 +251,8 @@ def run_weekly_pipeline(
         print("\n✅ No action required this week.")
 
     print(f"\nMarkdown: {report_path}")
-    print(f"PDF:      {pdf_path}")
+    if pdf_path:
+        print(f"PDF:      {pdf_path}")
     print("Dashboard: streamlit run src/reporting/dashboard.py")
 
     conn.close()
