@@ -88,9 +88,15 @@ Cross-correlations propagate causally error-free into the present → look-ahead
 **structurally eliminated**.
 
 **Current implementation status:** `src/data/db.py` implements DuckDB as the data store with
-staleness-based upserts. The CD-NKBF continuous filter and bitemporale t_e/t_k ontology are
-**deferred** — the current DB uses a single timestamp. Ghost States are not yet enforced.
-This is the primary Phase 2 gap.
+staleness-based upserts. The CD-NKBF continuous filter is **deferred** (Phase 2).
+The bitemporal `t_k` (knowledge time) column has been added to `prices`,
+`fundamentals_annual`, `fundamentals_quarterly`, and `macro_series` tables.
+Query functions (`get_latest_fundamentals`, `get_margin_history`, `get_macro_value`,
+`get_macro_series`) support optional `as_of_date`/`as_of_tk`/`bitemporal` parameters
+that filter by `t_k <= as_of_date`, preventing look-ahead bias from unreleased filings
+and macro data revisions. Ghost States are partially enforced — revisions currently
+overwrite (INSERT OR REPLACE); full append-only ghost state semantics (PK includes t_k)
+are Phase 2.5 scope.
 
 ---
 
@@ -233,15 +239,24 @@ Eq 12 — Robust Kelly — Complete Objective:
 
 **Currently implemented terms:**
 - `(μ_base) · f` — μ_NN = 0 pending Module III
-- `− ½ · σ²_alea · f²` — σ²_epist term: lightweight proxy via `composite_confidence`
-- `− c · σ_alea · |f − f_old|^1.5 · √(W/V)` — fully implemented
+- `− λ · σ_epist · f` — linear epistemic penalty (σ_epist proxy = 1 − composite_confidence)
+- `− ½ · (σ²_alea + σ²_epist) · f²` — total variance with epistemic component
+- `− c · σ_alea · |f − f_old|^1.5 · √(W/V)` — turnover market impact (Bouchaud square-root law)
+- `− η · σ · √(f·fraction·AUM/ADV) · f` — **Almgren-Chriss participation-rate penalty** (endogenous slippage)
 
 **Impact term convention:** In the optimizer, `f` is in full-Kelly space and `f_old` is the
 previous fraction-scaled portfolio weight (`kelly_25pct`). Turnover is computed as
 `|f × fraction − f_old|` to compare in the same weight space. This ensures zero impact
 penalty when the position is unchanged.
 
-**Not yet implemented:** λ·σ_epist·f linear penalty term (requires true σ_epist from Deep Ensembles).
+**Almgren-Chriss participation penalty:** The `eta_participation` parameter (η) controls
+the endogenous slippage penalty. When η > 0, the optimizer penalises the steady-state
+participation rate `f·AUM/ADV`, organically curving allocations away from illiquid names
+*before* hitting the hard 10% ADV warning or 25% ADV exit trigger. The penalty is factored
+as `η · σ · √(fraction · AUM / ADV) · √f · f` for computational efficiency.
+
+**Not yet implemented:** True σ_epist from Deep Ensembles (Module III); current proxy is
+1 − composite_confidence.
 
 #### Four Emergent System Properties
 
@@ -293,11 +308,11 @@ The algorithm and the portfolio manager are partners, not competitors.
 
 | Module | Spec | Implementation Status |
 |---|---|---|
-| I — Kausales Gedächtnis | CD-NKBF, bitemporale t_e/t_k, Ghost States | **Partial** — DuckDB store, no Kalman filter, single timestamp |
+| I — Kausales Gedächtnis | CD-NKBF, bitemporale t_e/t_k, Ghost States | **Partial** — DuckDB store with t_k columns, bitemporal query filtering, no Kalman filter. Ghost states: overwrite (append-only deferred to Phase 2.5) |
 | II — Deterministischer Anker | X_E, X_P, X_C, μ_base (eq 4–7) | **Complete** |
 | III — Hybrider Motor | UDE, Deep Ensembles, μ_NN, σ²_epist (eq 8–9) | **Deferred** — composite_confidence proxy only |
 | IV — Kontrafaktisches Labor | PI-SBDM, Lévy, minimax λ* (eq 10) | **Deferred** |
-| V — Hard-Capacity Kelly | Full eq 12 with all terms, Not-Aus | **Partial** — μ_NN=0, σ_epist proxy, w_max enforced, Not-Aus not wired |
+| V — Hard-Capacity Kelly | Full eq 12 with all terms, Not-Aus | **Partial** — μ_NN=0, σ_epist proxy via composite_confidence, Almgren-Chriss participation penalty, w_max enforced, ADV exit trigger, Not-Aus wired via σ_epist proxy |
 
 ---
 
@@ -350,7 +365,10 @@ Crowding is inverted by `composite.py`: the formula uses `(1 − X_C)`.
 - **Crowding inversion** — high X_C is bad; composite uses `(1 − X_C)`.
 - **tanh Fail-Safe** (spec principle, pending Module III) — AI correction bounded to (−1, +1), μ_base always dominant.
 - **Google Trends (X_C third component)** — only applied when data present in DB. Falls back to two-component formula silently.
-- **σ_epist Not-Aus** (spec principle, pending Module III+V wiring) — σ_epist → ∞ must trigger f* → 0.
+- **σ_epist Not-Aus** — σ_epist ≥ not_aus_threshold → f* = 0 (wired via composite_confidence proxy; true Deep Ensemble σ_epist pending Module III).
+- **Almgren-Chriss participation penalty** — η·σ·√(f·fraction·AUM/ADV) penalises steady-state illiquidity endogenously before hard ADV limits fire.
+- **ADV exit trigger** — position consuming > `adv_exit_threshold` (25%) of daily volume triggers automatic exit (Trigger 6 in monitor.py).
+- **Bitemporal t_k filtering** — fundamentals and macro queries filter by `t_k <= as_of_date` when `as_of_date` is provided, preventing look-ahead bias from unreleased filings and revised macro data.
 
 ---
 
@@ -369,7 +387,10 @@ Crowding is inverted by `composite.py`: the formula uses `(1 − X_C)`.
 | 9 | Deep Ensemble variance decomposition (σ²_epist, σ²_alea) | III | — | Deferred (proxy) |
 | 10 | Minimax calibration λ* (10,000 OOD scenarios) | IV | — | Deferred |
 | 11 | Square-Root Market Impact Law | V | `portfolio/kelly.py` | Implemented |
-| 12 | Robust Kelly full objective | V | `portfolio/kelly.py` | Partial (μ_NN=0, σ_epist proxy) |
+| 12 | Robust Kelly full objective | V | `portfolio/kelly.py` | Partial (μ_NN=0, σ_epist proxy, Almgren-Chriss participation penalty implemented) |
+| — | Almgren-Chriss participation penalty | V | `portfolio/kelly.py` | Implemented (η·σ·√(f·fraction·AUM/ADV)) |
+| — | ADV exit trigger (Trigger 6) | V | `portfolio/monitor.py` | Implemented (adv_exit_threshold) |
+| — | Bitemporal t_k schema | I | `data/db.py` | Implemented (query filtering, backfill) |
 
 ---
 
