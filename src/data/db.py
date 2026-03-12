@@ -221,6 +221,12 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
         "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS absorption_delta DOUBLE",
         "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS etf_corr_score DOUBLE",
         "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS short_interest_score DOUBLE",
+        # ── Swing momentum timing layer ────────────────────────────────────────
+        "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS swing_score DOUBLE",
+        "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS swing_confidence DOUBLE",
+        "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS rs_rank DOUBLE",
+        "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS breakout_score DOUBLE",
+        "ALTER TABLE signal_scores ADD COLUMN IF NOT EXISTS vcp_score DOUBLE",
         # ── Bitemporal t_k (knowledge time) columns ───────────────────────────
         # t_k = microsecond-exact timestamp when data became publicly available.
         # For prices: t_k ≈ market close + settlement delay.
@@ -588,6 +594,7 @@ _SIGNAL_SCORE_COLS = [
     "quality_score", "quality_confidence", "roic_wacc_spread", "margin_snr",
     "inflation_convexity", "crowding_score", "crowding_confidence",
     "autocorr_delta", "absorption_delta", "etf_corr_score", "short_interest_score",
+    "swing_score", "swing_confidence", "rs_rank", "breakout_score", "vcp_score",
     "composite_score", "composite_confidence",
     "mu_estimate", "sigma_estimate", "kelly_fraction", "kelly_25pct",
     "entry_signal", "exit_signal",
