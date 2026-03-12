@@ -1,6 +1,6 @@
 """
 Price data fetcher: yfinance (primary), Tiingo fallback for US stocks,
-EODHD fallback for EU stocks.
+FMP fallback, EODHD fallback for EU stocks.
 Writes to DuckDB prices table. Respects staleness window from params.
 """
 import os
@@ -265,6 +265,89 @@ def fetch_prices_tiingo(
 
 
 # ---------------------------------------------------------------------------
+# FMP fetch (Financial Modeling Prep)
+# ---------------------------------------------------------------------------
+
+FMP_BASE = "https://financialmodelingprep.com/api/v3"
+
+
+def fetch_prices_fmp(
+    tickers: list[str],
+    start_date: str,
+    end_date: str,
+    api_key: str,
+    api_keys: Optional[list[str]] = None,
+) -> pd.DataFrame:
+    """
+    Fetch EOD prices from Financial Modeling Prep historical-price-full endpoint.
+    Rotates to next key on 401/429.
+    Returns long-format DataFrame matching prices table schema.
+    """
+    import requests
+
+    keys = api_keys if api_keys else [api_key]
+    key_index = [0]
+
+    def _get(url: str, params: dict):
+        for attempt in range(len(keys)):
+            params["apikey"] = keys[key_index[0]]
+            resp = requests.get(url, params=params, timeout=30)
+            if resp.status_code in (401, 429):
+                logger.warning(
+                    f"FMP key index {key_index[0]} returned {resp.status_code}, rotating"
+                )
+                key_index[0] = (key_index[0] + 1) % len(keys)
+                continue
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            return resp
+        return None
+
+    rows = []
+    for ticker in tickers:
+        # FMP uses plain US symbols; strip exchange suffix for non-US where needed
+        fmp_ticker = ticker.split(".")[0] if "." in ticker else ticker
+        url = f"{FMP_BASE}/historical-price-full/{fmp_ticker}"
+        try:
+            resp = _get(url, {"from": start_date, "to": end_date})
+            if resp is None:
+                continue
+            data = resp.json()
+            historical = data.get("historical") if isinstance(data, dict) else None
+            if not historical:
+                continue
+            df = pd.DataFrame(historical)
+            df["ticker"] = ticker
+            df = df.rename(columns={
+                "date": "date",
+                "open": "open",
+                "high": "high",
+                "low": "low",
+                "close": "close",
+                "adjClose": "adj_close",
+                "volume": "volume",
+            })
+            df["source"] = "fmp"
+            df["currency"] = "USD"  # overridden per-stock later
+            rows.append(df)
+        except Exception as e:
+            logger.warning(f"FMP price fetch failed for {ticker}: {e}")
+
+    if not rows:
+        return pd.DataFrame()
+
+    result = pd.concat(rows, ignore_index=True)
+    result["date"] = pd.to_datetime(result["date"]).dt.date
+    keep = ["ticker", "date", "open", "high", "low", "close", "adj_close",
+            "volume", "currency", "source"]
+    for col in keep:
+        if col not in result.columns:
+            result[col] = None
+    return result[keep].dropna(subset=["adj_close"])
+
+
+# ---------------------------------------------------------------------------
 # Main update function
 # ---------------------------------------------------------------------------
 
@@ -276,6 +359,7 @@ def update_prices(
     eodhd_api_key: Optional[str] = None,
     eodhd_api_keys: Optional[list[str]] = None,
     tiingo_api_key: Optional[str] = None,
+    fmp_api_keys: Optional[list[str]] = None,
     force_refresh: bool = False,
 ) -> dict[str, str]:
     """
@@ -287,9 +371,10 @@ def update_prices(
       3. Try yfinance. For EU stocks without EODHD key, yfinance is fine for major
          exchanges (XETRA tickers like RHM.DE work with yfinance).
       4. If yfinance returns empty AND tiingo_api_key available: try Tiingo (US stocks).
-      5. If still empty AND eodhd_api_key available: try EODHD.
-      6. Assign currency from universe_df.
-      7. Upsert to DB.
+      5. If still empty AND fmp_api_keys available: try FMP.
+      6. If still empty AND eodhd_api_key available: try EODHD.
+      7. Assign currency from universe_df.
+      8. Upsert to DB.
 
     Returns dict: ticker -> status ('updated'|'cached'|'failed')
     """
@@ -368,7 +453,20 @@ def update_prices(
                 if not tiingo_df.empty:
                     df = pd.concat([df, tiingo_df], ignore_index=True) if not df.empty else tiingo_df
 
-        # Per-ticker EODHD fallback: retry any ticker that got zero rows from yfinance/Tiingo
+        # FMP fallback: any ticker still missing after yfinance + Tiingo
+        if fmp_api_keys:
+            fetched_tickers = set(df["ticker"].unique()) if not df.empty else set()
+            missing_fmp = [t for t in group_tickers if t not in fetched_tickers]
+            if missing_fmp:
+                fmp_df = fetch_prices_fmp(
+                    missing_fmp, start, today,
+                    api_key=fmp_api_keys[0],
+                    api_keys=fmp_api_keys,
+                )
+                if not fmp_df.empty:
+                    df = pd.concat([df, fmp_df], ignore_index=True) if not df.empty else fmp_df
+
+        # Per-ticker EODHD fallback: retry any ticker that got zero rows from yfinance/Tiingo/FMP
         if eodhd_api_key:
             fetched_tickers = set(df["ticker"].unique()) if not df.empty else set()
             missing = [
