@@ -151,3 +151,35 @@ reporting:
   output_dir: "reports"
   top_candidates_count: 10
   watch_crowding_threshold: 0.55   # flag for monitoring before exit threshold
+
+# ── Swing-trade momentum timing layer ────────────────────────────────────────
+# Three pattern sub-scores combine into swing_score [0, 1].
+# When swing_entry_threshold > 0, the entry_signal in composite.py is gated:
+# a fundamentally sound stock (composite >= entry_threshold) only fires an
+# entry when its price structure also confirms a timing setup.
+#
+# Set swing_entry_threshold: 0.0 to disable the timing gate entirely.
+momentum:
+  # Relative Strength Rank (IBD-style peer percentile)
+  rs_lookback_long: 252       # 12-month return window (primary RS weight)
+  rs_lookback_short: 63       # 3-month return window  (recency RS weight)
+  rs_skip_days: 5             # skip most recent N days to reduce reversion noise
+
+  # Breakout Score (O'Neil/Minervini pivot-breakout + volume confirmation)
+  breakout_window: 252        # N-day high used as the breakout pivot reference
+  breakout_volume_window: 50  # baseline days for average-volume computation
+  breakout_volume_ratio: 1.5  # volume must be ≥ 1.5× avg to score fully (1.0)
+
+  # VCP Score (Minervini Volatility Contraction Pattern — "coiling spring")
+  vcp_atr_window_recent: 15   # recent ATR window (tight base detection)
+  vcp_atr_window_baseline: 60 # baseline ATR window (reference range)
+
+  # Composite swing_score weights (must sum to a positive value; auto-normalised)
+  swing_weight_rs: 0.40       # RS rank weight
+  swing_weight_breakout: 0.40 # breakout proximity + volume weight
+  swing_weight_vcp: 0.20      # VCP volatility contraction weight
+
+  # Entry gate: composite entry_signal is suppressed if swing_score < this.
+  # 0.0 = timing gate disabled (pure fundamental mode, backward-compatible).
+  # 0.40 = recommended: only enter when RS + breakout + VCP align.
+  swing_entry_threshold: 0.40
