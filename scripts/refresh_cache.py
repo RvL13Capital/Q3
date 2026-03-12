@@ -51,8 +51,8 @@ def _load_params() -> dict:
 
 def _init_db(conn) -> None:
     """Bootstrap schema in the in-memory DB."""
-    from src.data.db import init_schema
-    init_schema(conn)
+    from src.data.db import initialize_schema
+    initialize_schema(conn)
 
 
 def _export_macro(conn) -> int:
