@@ -94,7 +94,10 @@ def run_weekly_pipeline(
     eodhd_api_key_2 = (os.getenv("EODHD_API_KEY_2") or "").strip() or None
     tiingo_api_key  = (os.getenv("TIINGO_API")    or "").strip() or None
     dbnomics_api_key = (os.getenv("DB_KEY")       or "").strip() or None
+    fmp_api_key     = (os.getenv("FMP_API")       or "").strip() or None
+    fmp_api_key_2   = (os.getenv("FMP2_API")      or "").strip() or None
     eodhd_keys = [k for k in [eodhd_api_key, eodhd_api_key_2] if k]
+    fmp_keys   = [k for k in [fmp_api_key, fmp_api_key_2] if k]
 
     if not fred_api_key:
         logger.warning("FRED_API_KEY not set — US/CA macro data unavailable")
@@ -106,6 +109,8 @@ def run_weekly_pipeline(
         logger.info("TIINGO_API loaded — Tiingo fallback enabled for US/CA prices")
     if dbnomics_api_key:
         logger.info("DB_KEY loaded — DBnomics authenticated requests enabled")
+    if fmp_keys:
+        logger.info(f"FMP_API: {len(fmp_keys)} key(s) loaded — FMP fallback enabled")
 
     # ── 2. Data Refresh ──────────────────────────────────────────────────────
     if not skip_fetch:
@@ -119,6 +124,7 @@ def run_weekly_pipeline(
             eodhd_api_key=eodhd_keys[0] if eodhd_keys else None,
             eodhd_api_keys=eodhd_keys,
             tiingo_api_key=tiingo_api_key,
+            fmp_api_keys=fmp_keys or None,
             force_refresh=force_refresh,
         )
         n_updated = sum(1 for v in price_results.values() if v == "updated")
@@ -133,6 +139,7 @@ def run_weekly_pipeline(
             conn, universe, params,
             eodhd_api_key=eodhd_keys[0] if eodhd_keys else None,
             eodhd_api_keys=eodhd_keys,
+            fmp_api_keys=fmp_keys or None,
             force_refresh=force_refresh,
         )
         n_fund_updated = sum(1 for v in fund_results.values() if v == "updated")

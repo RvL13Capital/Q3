@@ -1,5 +1,6 @@
 """
-Fundamental data fetcher: SEC EDGAR (US/GAAP), EODHD (EU/IFRS), yfinance (fallback).
+Fundamental data fetcher: SEC EDGAR (US/GAAP), EODHD (EU/IFRS),
+FMP (fallback), yfinance (final fallback).
 Computes ROIC with IFRS 16 adjustment for EU stocks.
 """
 import logging
@@ -325,6 +326,122 @@ def fetch_fundamentals_eodhd(
 
 
 # ---------------------------------------------------------------------------
+# FMP fetch (Financial Modeling Prep)
+# ---------------------------------------------------------------------------
+
+FMP_BASE = "https://financialmodelingprep.com/api/v3"
+
+
+def fetch_fundamentals_fmp(
+    ticker: str,
+    accounting_std: str,
+    currency: str,
+    api_key: str,
+    api_keys: Optional[list[str]] = None,
+    lookback_years: int = 5,
+) -> pd.DataFrame:
+    """
+    Fetch annual fundamentals from FMP income-statement + balance-sheet endpoints.
+    Rotates to next key on 401/429.
+    Returns DataFrame matching fundamentals_annual schema, or empty DF.
+    """
+    keys = api_keys if api_keys else [api_key]
+    key_index = [0]
+
+    def _get(url: str):
+        for attempt in range(len(keys)):
+            try:
+                resp = requests.get(
+                    url,
+                    params={"period": "annual", "limit": lookback_years + 1,
+                            "apikey": keys[key_index[0]]},
+                    timeout=30,
+                )
+                if resp.status_code in (401, 429):
+                    logger.warning(
+                        f"FMP key index {key_index[0]} returned {resp.status_code}, rotating"
+                    )
+                    key_index[0] = (key_index[0] + 1) % len(keys)
+                    continue
+                if resp.status_code == 404:
+                    return []
+                resp.raise_for_status()
+                return resp.json()
+            except Exception as e:
+                logger.warning(f"FMP fundamentals fetch failed for {ticker}: {e}")
+                return []
+        return []
+
+    # FMP uses plain US ticker; strip exchange suffix
+    fmp_ticker = ticker.split(".")[0] if "." in ticker else ticker
+    cutoff_year = date.today().year - lookback_years
+
+    income_data  = _get(f"{FMP_BASE}/income-statement/{fmp_ticker}")
+    balance_data = _get(f"{FMP_BASE}/balance-sheet-statement/{fmp_ticker}")
+
+    if not income_data:
+        return pd.DataFrame()
+
+    # Index balance sheets by date for quick lookup
+    balance_by_date = {b["date"]: b for b in balance_data} if balance_data else {}
+
+    rows = []
+    for inc in income_data:
+        try:
+            period_end = datetime.strptime(inc["date"][:10], "%Y-%m-%d").date()
+        except (KeyError, ValueError):
+            continue
+        fy = period_end.year
+        if fy < cutoff_year:
+            continue
+
+        bal = balance_by_date.get(inc["date"], {})
+
+        def _f(d: dict, *keys_: str) -> Optional[float]:
+            for k in keys_:
+                v = d.get(k)
+                if v is not None:
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        pass
+            return None
+
+        row = {
+            "ticker":            ticker,
+            "fiscal_year":       fy,
+            "report_date":       period_end,
+            "currency":          currency,
+            "accounting_std":    accounting_std,
+            "source":            "fmp",
+            "revenue":           _f(inc, "revenue"),
+            "gross_profit":      _f(inc, "grossProfit"),
+            "ebit":              _f(inc, "operatingIncome", "ebitda"),
+            "net_income":        _f(inc, "netIncome"),
+            "interest_expense":  _f(inc, "interestExpense"),
+            "tax_expense":       _f(inc, "incomeTaxExpense"),
+            "total_assets":      _f(bal, "totalAssets"),
+            "total_equity":      _f(bal, "totalEquity", "totalStockholdersEquity"),
+            "total_debt":        _f(bal, "totalDebt", "longTermDebt"),
+            "cash":              _f(bal, "cashAndCashEquivalents", "cash"),
+            "goodwill":          _f(bal, "goodwill"),
+            "intangible_assets": _f(bal, "intangibleAssets"),
+            "right_of_use_assets": None,
+            "lease_liabilities":   None,
+            "capex":             _f(inc, "capitalExpenditure"),
+        }
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df = _ensure_annual_columns(df)
+    df = _enrich_fundamentals(df)
+    return df
+
+
+# ---------------------------------------------------------------------------
 # yfinance fallback
 # ---------------------------------------------------------------------------
 
@@ -411,14 +528,14 @@ def update_fundamentals(
     params: dict,
     eodhd_api_key: Optional[str] = None,
     eodhd_api_keys: Optional[list[str]] = None,
+    fmp_api_keys: Optional[list[str]] = None,
     force_refresh: bool = False,
 ) -> dict[str, str]:
     """
     Update fundamentals for all universe stocks.
     Routing logic:
-      US GAAP → EDGAR first, yfinance fallback
-      EU IFRS → EODHD (if key), yfinance fallback
-      CA IFRS → EODHD (if key), yfinance fallback (no SEDAR+ free API)
+      US GAAP → EDGAR → FMP → yfinance
+      EU/CA IFRS → EODHD (if key) → FMP → yfinance
     Returns dict: ticker -> status
     """
     from src.data.db import upsert_fundamentals_annual, is_stale, log_fetch
@@ -441,6 +558,12 @@ def update_fundamentals(
 
         if region == "US" and accounting_std == "GAAP":
             df = fetch_fundamentals_edgar(ticker)
+            if df.empty and fmp_api_keys:
+                df = fetch_fundamentals_fmp(ticker, accounting_std, currency,
+                                            api_key=fmp_api_keys[0],
+                                            api_keys=fmp_api_keys)
+                if not df.empty:
+                    logger.info(f"{ticker}: fell back to FMP fundamentals")
             if df.empty:
                 df = fetch_fundamentals_yfinance(ticker, accounting_std, currency)
                 if not df.empty:
@@ -449,6 +572,18 @@ def update_fundamentals(
             df = fetch_fundamentals_eodhd(ticker, eodhd_ticker, eodhd_api_key,
                                           accounting_std, currency,
                                           api_keys=eodhd_api_keys)
+            if df.empty and fmp_api_keys:
+                df = fetch_fundamentals_fmp(ticker, accounting_std, currency,
+                                            api_key=fmp_api_keys[0],
+                                            api_keys=fmp_api_keys)
+                if not df.empty:
+                    logger.info(f"{ticker}: fell back to FMP fundamentals")
+            if df.empty:
+                df = fetch_fundamentals_yfinance(ticker, accounting_std, currency)
+        elif fmp_api_keys:
+            df = fetch_fundamentals_fmp(ticker, accounting_std, currency,
+                                        api_key=fmp_api_keys[0],
+                                        api_keys=fmp_api_keys)
             if df.empty:
                 df = fetch_fundamentals_yfinance(ticker, accounting_std, currency)
         else:
