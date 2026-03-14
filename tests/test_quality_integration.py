@@ -291,3 +291,159 @@ def test_batch_quality_scores_missing_ticker(conn, sample_universe, params):
     # No fundamentals → roic_conf=0 → hard gate → quality_score=0.0
     ccj_score = result[result["ticker"] == "CCJ"]["quality_score"].iloc[0]
     assert ccj_score == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# Convexity cap and confidence attenuation (Fix 1)
+# ---------------------------------------------------------------------------
+
+def _insert_high_convexity_company(conn, params, ticker="CAPTEST", gm_series=None,
+                                    ppi_values=None):
+    """Insert a company with rising margins and rising PPI for convexity tests.
+
+    Returns fundamentals DataFrame for reference.
+    """
+    if gm_series is None:
+        # Strong pricing power: margins rise sharply with PPI
+        gm_series = [0.30, 0.33, 0.37, 0.42, 0.48, 0.55]
+    if ppi_values is None:
+        ppi_values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+
+    rows = []
+    for i, gm in enumerate(gm_series):
+        fy = 2019 + i
+        rev = 5e9
+        gp = rev * gm
+        ebit = rev * 0.20  # high ROIC to pass hard gate
+        equity, debt, cash, gw = 3e9, 1e9, 0.5e9, 0.5e9
+        ic = equity + debt - cash - gw
+        nopat = ebit * 0.79
+        rows.append({
+            "ticker": ticker, "fiscal_year": fy,
+            "report_date": date(fy, 12, 31), "currency": "USD",
+            "accounting_std": "GAAP", "source": "test",
+            "revenue": rev, "gross_profit": gp, "ebit": ebit,
+            "net_income": ebit * 0.75, "interest_expense": debt * 0.04,
+            "tax_expense": ebit * 0.21, "total_assets": equity + debt,
+            "total_equity": equity, "total_debt": debt, "cash": cash,
+            "goodwill": gw, "intangible_assets": 0.2e9,
+            "right_of_use_assets": None, "lease_liabilities": None,
+            "capex": rev * 0.04, "gross_margin": gm, "invested_capital": ic,
+            "nopat": nopat, "roic": nopat / ic, "effective_tax_rate": 0.21,
+        })
+    fund_df = pd.DataFrame(rows)
+    upsert_fundamentals_annual(conn, fund_df)
+
+    # PPI series aligned to fiscal years
+    macro_rows = []
+    for i, ppi_val in enumerate(ppi_values):
+        yr = 2019 + i
+        for m in range(1, 13):
+            macro_rows.append({"date": date(yr, m, 28).isoformat(),
+                                "value": ppi_val, "source": "test"})
+    upsert_macro(conn, params["macro"]["us_ppi_series"], pd.DataFrame(macro_rows))
+
+    # Insert yields so WACC can be computed
+    yield_rows = pd.DataFrame({
+        "date": [date(2019 + i // 365, 1, 1) + timedelta(days=i % 365)
+                 for i in range(2500)],
+        "source": "test",
+    })
+    yield_rows["date"] = yield_rows["date"].apply(lambda d: d.isoformat())
+    yield_rows["value"] = 4.3
+    upsert_macro(conn, params["macro"]["us_risk_free_series"], yield_rows)
+
+    return fund_df
+
+
+def test_convexity_cap_limits_multiplier(conn, params):
+    """With slope=0.5 and γ=2.0, uncapped exp(1.0)=2.72.
+    After confidence attenuation and hard cap at 1.50, the quality_score
+    must be bounded by the cap effect."""
+    _insert_high_convexity_company(conn, params, ticker="CAPTEST")
+
+    result = compute_quality_score("CAPTEST", conn, params, "2024-12-31", "US")
+    assert result["quality_score"] > 0.0, "Should have positive quality score"
+
+    # Now compute without cap to verify capping is active
+    import copy
+    params_uncapped = copy.deepcopy(params)
+    del params_uncapped["signals"]["quality"]["convexity_cap"]
+    result_uncapped = compute_quality_score("CAPTEST", conn, params_uncapped, "2024-12-31", "US")
+
+    # The capped score should be <= uncapped score (cap reduces amplification)
+    assert result["quality_score"] <= result_uncapped["quality_score"], \
+        f"Capped {result['quality_score']} should be <= uncapped {result_uncapped['quality_score']}"
+
+
+def test_convexity_cap_absent_no_cap(conn, params):
+    """When convexity_cap is missing from params, old uncapped behavior is preserved."""
+    import copy, math
+    params_no_cap = copy.deepcopy(params)
+    del params_no_cap["signals"]["quality"]["convexity_cap"]
+
+    _insert_high_convexity_company(conn, params_no_cap, ticker="NOCAP")
+
+    # Compute convexity to verify it's positive
+    convexity, conf = compute_inflation_convexity(
+        "NOCAP", conn, params_no_cap, "2024-12-31", "US", lookback_years=5
+    )
+    assert convexity > 0, f"Expected positive convexity, got {convexity}"
+
+    # With no cap, the quality score should still be valid [0, 1]
+    result = compute_quality_score("NOCAP", conn, params_no_cap, "2024-12-31", "US")
+    assert 0.0 <= result["quality_score"] <= 1.0
+
+    # Verify that the conv_factor is not artificially limited:
+    # Since there's no cap param, the default is inf, so attenuation still applies
+    # but there's no hard ceiling. The score should be >= what a capped version produces.
+    params_capped = copy.deepcopy(params)  # has convexity_cap: 1.50
+    result_capped = compute_quality_score("NOCAP", conn, params_capped, "2024-12-31", "US")
+    assert result["quality_score"] >= result_capped["quality_score"], \
+        "Uncapped score should be >= capped score"
+
+
+def test_convexity_confidence_attenuation(conn, params):
+    """Low-confidence convexity (few data points) should produce less amplification
+    than high-confidence convexity (many data points)."""
+    # Few data points (3 years → 2 diffs → low confidence)
+    _insert_high_convexity_company(
+        conn, params, ticker="FEWPTS",
+        gm_series=[0.30, 0.38, 0.48],
+        ppi_values=[1.0, 3.0, 5.0],
+    )
+    # Insert yields for FEWPTS
+    yield_rows = pd.DataFrame({
+        "date": [(date(2019, 1, 1) + timedelta(days=i)).isoformat()
+                 for i in range(2500)],
+        "value": 4.3,
+        "source": "test",
+    })
+    upsert_macro(conn, params["macro"]["us_risk_free_series"], yield_rows)
+
+    conv_few, conf_few = compute_inflation_convexity(
+        "FEWPTS", conn, params, "2024-12-31", "US", lookback_years=5
+    )
+
+    # Many data points (6 years → 5 diffs → higher confidence)
+    _insert_high_convexity_company(
+        conn, params, ticker="MANYPTS",
+        gm_series=[0.30, 0.33, 0.37, 0.42, 0.48, 0.55],
+        ppi_values=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    )
+
+    conv_many, conf_many = compute_inflation_convexity(
+        "MANYPTS", conn, params, "2024-12-31", "US", lookback_years=5
+    )
+
+    # Both should have positive convexity
+    assert conv_few > 0, f"Expected positive convexity for FEWPTS, got {conv_few}"
+    assert conv_many > 0, f"Expected positive convexity for MANYPTS, got {conv_many}"
+
+    # More data points → higher confidence
+    assert conf_many > conf_few, \
+        f"More data points should give higher confidence: {conf_many} vs {conf_few}"
+
+    # With convexity_min_points=4 in params, 2 data points / max(4, 5) = 0.4 confidence
+    # vs 5 data points / max(4, 5) = 1.0 confidence
+    assert conf_few < 1.0, f"Few points should have confidence < 1.0, got {conf_few}"

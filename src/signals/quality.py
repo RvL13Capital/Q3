@@ -68,7 +68,7 @@ def compute_roic_wacc_spread(
         return float("nan"), 0.0
 
     rf = rf_cache[region] if (rf_cache and region in rf_cache) else \
-        get_risk_free_rate(conn, region, as_of_date, params)
+        get_risk_free_rate(conn, region, as_of_date, params, as_of_tk=as_of_date)
     erp = params["return_estimation"]["equity_risk_premium"]
     wacc = rf + erp  # simplified WACC (no beta, no leverage adjustment for MVP)
 
@@ -167,7 +167,8 @@ def compute_inflation_convexity(
 
     # Annual average PPI for each fiscal year (from monthly YoY series)
     ppi_series = get_inflation_yoy(conn, region, "ppi", as_of_date, params,
-                                   lookback_months=(lookback_years + 1) * 12)
+                                   lookback_months=(lookback_years + 1) * 12,
+                                   as_of_tk=as_of_date)
     if ppi_series.empty:
         return float("nan"), 0.0
 
@@ -196,7 +197,8 @@ def compute_inflation_convexity(
     if np.isnan(convexity):
         return float("nan"), 0.0
 
-    confidence = min(1.0, int(mask.sum()) / lookback_years)
+    min_points = params.get("signals", {}).get("quality", {}).get("convexity_min_points", lookback_years)
+    confidence = min(1.0, int(mask.sum()) / max(min_points, lookback_years))
     return convexity, confidence
 
 
@@ -252,6 +254,11 @@ def compute_quality_score(
         # Sub-component 3: exp(γ · max(0, slope)) — convexity amplifier
         safe_slope  = max(0.0, convexity) if not pd.isna(convexity) else 0.0
         conv_factor = math.exp(gamma * safe_slope)
+        # Confidence-based attenuation: noisy regression → less amplification
+        conv_factor = 1.0 + (conv_factor - 1.0) * conv_conf
+        # Hard cap from params (default: no cap for backward compat)
+        convexity_cap = float(q_params.get("convexity_cap", float("inf")))
+        conv_factor = min(conv_factor, convexity_cap)
 
         quality_score = min(1.0, spread_factor * snr_factor * conv_factor)
         quality_conf  = (roic_conf + margin_conf + conv_conf) / 3.0

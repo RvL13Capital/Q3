@@ -266,6 +266,8 @@ def params():
                 "margin_snr_min":       2.0,
                 "margin_snr_max":       10.0,
                 "gamma":                2.0,
+                "convexity_cap":        1.50,
+                "convexity_min_points": 4,
                 "convexity_max":        0.50,
                 "lookback_years":       5,
             },

@@ -63,6 +63,8 @@ signals:
     # gamma: steepness of the exp(γ·max(0, slope)) convexity multiplier (eq 5)
     # gamma=2 → slope=0.5 → exp(1.0)=2.72× amplification for strong pricing power
     gamma: 2.0
+    convexity_cap: 1.50              # hard ceiling on exp(γ·slope) convexity multiplier
+    convexity_min_points: 4          # regression points for full confidence (denominator)
     convexity_max: +0.50         # slope beyond this is treated as fully anti-fragile
     lookback_years: 5
 
