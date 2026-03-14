@@ -234,6 +234,9 @@ def params():
             "not_aus_confidence": 0.20,       # composite_confidence < this → Not-Aus
             "eta_participation":  0.50,       # Almgren-Chriss participation-rate penalty η
             "adv_exit_threshold": 0.25,      # exit if position > 25% of ADV
+            "momentum_boost_beta":          0.50,
+            "sigma_epist_model_weight":     0.50,
+            "sigma_epist_vol_of_vol_window": 60,
         },
         "signals": {
             "entry_threshold":           0.30,

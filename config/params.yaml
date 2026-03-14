@@ -17,6 +17,18 @@ kelly:
   # the hard 10%/25% ADV boundaries.  0.0 = disabled (conservative default).
   eta_participation: 0.50   # η: participation impact coefficient (calibrate to fund's execution quality)
   adv_exit_threshold: 0.25  # exit trigger: position > 25% of ADV → "Roach Motel" risk
+  # Covariance matrix estimation (Ledoit-Wolf shrinkage)
+  use_shrunk_cov: true       # use Ledoit-Wolf shrunk covariance for sigma estimation
+  cov_window_days: 252       # observation window for covariance matrix (trading days)
+  cov_min_obs: 60            # minimum non-NaN observations required per asset
+  # Momentum overlay: symmetric μ boost/discount from swing_score (proto-μ_NN).
+  # μ_boosted = μ_base × (1 + β × (swing_score − 0.5) × 2 × swing_confidence)
+  # 0.0 = disabled (pure fundamental), 0.50 = ±50% of μ_base at full momentum.
+  # Bridge implementation — replaced by Deep Ensembles μ_NN in Phase 3.
+  momentum_boost_beta: 0.50
+  # Blended sigma_epist (Fix 5): combines data availability with model uncertainty
+  sigma_epist_model_weight: 0.50   # weight for model uncertainty component (0.0 → current behavior)
+  sigma_epist_vol_of_vol_window: 60  # short window for vol-of-vol comparison
 
 signals:
   # Composite formula is multiplicative: X_E × X_P × (1 - X_C)
