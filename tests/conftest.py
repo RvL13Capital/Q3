@@ -298,6 +298,14 @@ def params():
             "us_energy_ppi_series":      "US_PPIENG",
             "bucket_fallback_confidence": 0.40,
         },
+        "data_maturity": {
+            "enabled": True,
+            "min_price_days": 252,
+            "min_fundamental_years": 3,
+            "min_margin_years": 3,
+            "penalty_floor": 0.30,
+            "composite_confidence_blend": 0.30,
+        },
         "return_estimation": {
             "equity_risk_premium":  0.05,
             "theta_risk_premium":   0.30,

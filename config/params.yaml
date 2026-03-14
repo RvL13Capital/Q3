@@ -108,6 +108,14 @@ return_estimation:
   # composite ∈ [0,1]; θ calibrated so composite=0.50 → ~15% above rf
   theta_risk_premium: 0.30
 
+data_maturity:
+  enabled: true                    # enable Data Maturity Score (false → current behavior)
+  min_price_days: 252              # 1 year of trading days for full maturity
+  min_fundamental_years: 3         # 3 fiscal years of fundamentals for full maturity
+  min_margin_years: 3              # 3 fiscal years of margin data for full maturity
+  penalty_floor: 0.30              # DMS never goes below this (even for fresh IPOs)
+  composite_confidence_blend: 0.30 # weight of DMS in composite confidence blend
+
 data:
   price_staleness_days: 1
   fundamental_staleness_days: 90

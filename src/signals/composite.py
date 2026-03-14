@@ -37,6 +37,46 @@ MIN_COMPOSITE_CONFIDENCE = 0.40
 
 
 # ---------------------------------------------------------------------------
+# Data Maturity Score (Fix 4)
+# ---------------------------------------------------------------------------
+
+def compute_data_maturity(
+    n_price_days: int,
+    n_fundamental_years: int,
+    n_margin_years: int,
+    params: dict,
+) -> float:
+    """
+    Data Maturity Score — geometric mean of three maturity dimensions.
+
+    Each dimension: score_i = min(1.0, actual / required).
+    Combined: dms = geometric_mean(scores), floored at penalty_floor.
+
+    Geometric mean penalizes stocks weak in any dimension.
+    Returns a value in [penalty_floor, 1.0].
+    """
+    dm_params = params.get("data_maturity", {})
+    min_price = dm_params.get("min_price_days", 252)
+    min_fund = dm_params.get("min_fundamental_years", 3)
+    min_margin = dm_params.get("min_margin_years", 3)
+    floor = dm_params.get("penalty_floor", 0.30)
+
+    # Individual dimension scores
+    price_score = min(1.0, n_price_days / max(1, min_price))
+    fund_score = min(1.0, n_fundamental_years / max(1, min_fund))
+    margin_score = min(1.0, n_margin_years / max(1, min_margin))
+
+    # Geometric mean of the three scores
+    product = price_score * fund_score * margin_score
+    if product <= 0:
+        dms = 0.0
+    else:
+        dms = product ** (1.0 / 3.0)
+
+    return max(floor, dms)
+
+
+# ---------------------------------------------------------------------------
 # Main composite function
 # ---------------------------------------------------------------------------
 
@@ -47,6 +87,7 @@ def compute_composite_score(
     params: dict,
     rf: float = 0.04,
     swing: Optional[dict] = None,
+    data_maturity: Optional[float] = None,
 ) -> dict:
     """
     Combine physical, quality, and crowding into composite score.
@@ -69,7 +110,14 @@ def compute_composite_score(
     c_conf  = crowding.get("crowding_confidence", 0.0)
     c_inv   = 1.0 - c_score                        # (1 − X_C)
 
-    comp_conf = (p_conf + q_conf + c_conf) / 3.0
+    signal_conf = (p_conf + q_conf + c_conf) / 3.0
+    dm_params = params.get("data_maturity", {})
+    dm_enabled = dm_params.get("enabled", False)
+    dm_blend = dm_params.get("composite_confidence_blend", 0.30)
+    if dm_enabled and data_maturity is not None:
+        comp_conf = (1.0 - dm_blend) * signal_conf + dm_blend * data_maturity
+    else:
+        comp_conf = signal_conf
 
     # Data gate — threshold from params; fall back to module constant for compat.
     min_conf = params.get("signals", {}).get(
@@ -97,7 +145,7 @@ def compute_composite_score(
         entry_signal = (
             composite >= entry_threshold
             and c_score <= crowd_entry_max
-            and q_score >= qual_exit_thr
+            and q_score >= qual_exit_thr  # no separate entry quality gate — don't enter what we'd exit
         )
         # Apply swing timing gate when configured and data is available
         swing_thr = params.get("momentum", {}).get("swing_entry_threshold", 0.0)
@@ -181,7 +229,7 @@ def run_weekly_scoring(
 
     # Pre-fetch rf rates once per region for the mu_base calculation.
     regions  = universe_df["region"].unique().tolist()
-    rf_cache = {r: get_risk_free_rate(conn, r, as_of_date, params) for r in regions}
+    rf_cache = {r: get_risk_free_rate(conn, r, as_of_date, params, as_of_tk=as_of_date) for r in regions}
 
     # Index sub-score DataFrames for O(1) lookup (preserve "ticker" key in each row dict).
     p_idx = {r["ticker"]: r.to_dict() for _, r in physical_df.iterrows()}  if not physical_df.empty  else {}
@@ -200,7 +248,29 @@ def run_weekly_scoring(
         m = m_idx.get(ticker) or None   # None → gate disabled for this stock
 
         rf = rf_cache.get(region, rf_cache.get("US", 0.04))
-        result = compute_composite_score(p, q, c, params, rf=rf, swing=m)
+
+        # Data Maturity Score (Fix 4)
+        dms_value = None
+        dm_params = params.get("data_maturity", {})
+        if dm_params.get("enabled", False):
+            from src.data.db import get_margin_history
+            # Count price days available for this ticker
+            price_count = conn.execute(
+                "SELECT COUNT(DISTINCT date) FROM prices WHERE ticker = ? AND date <= ?",
+                [ticker, as_of_date],
+            ).fetchone()[0]
+            n_price_days = price_count or 0
+            # Count fundamental years
+            margin_df = get_margin_history(conn, ticker, n_years=10, as_of_date=as_of_date)
+            if not margin_df.empty:
+                n_fund_years = margin_df["fiscal_year"].nunique() if "fiscal_year" in margin_df.columns else 0
+                n_margin_years = margin_df["gross_margin"].dropna().shape[0]
+            else:
+                n_fund_years = 0
+                n_margin_years = 0
+            dms_value = compute_data_maturity(n_price_days, n_fund_years, n_margin_years, params)
+
+        result = compute_composite_score(p, q, c, params, rf=rf, swing=m, data_maturity=dms_value)
         result["score_date"] = as_of_date
         rows.append(result)
 
