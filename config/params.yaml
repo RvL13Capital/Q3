@@ -8,7 +8,8 @@ kelly:
   aum_eur: 50_000_000     # current AUM in EUR — set to actual fund size
   impact_scaling: 1.0     # universal impact constant c ≈ 1.0 (Bouchaud et al.)
   # Epistemic risk parameters (eq 12: λ · σ_epist · f  +  ½ · σ²_epist · f²)
-  # σ_epist proxy = 1 − composite_confidence  (Phase 3: replace with Deep Ensemble σ_epist)
+  # σ_epist = blend of data availability and model uncertainty (see sigma_epist_model_weight)
+  # Phase 3: replace with true Deep Ensemble σ_epist (eq 9)
   lambda_epist: 0.25        # λ: linear epistemic penalty coefficient (calibrated to 1−confidence proxy; replace with true scale when Deep Ensembles land)
   not_aus_confidence: 0.20  # composite_confidence < this → Not-Aus → f* = 0 instantly
   # Almgren-Chriss participation-rate penalty (endogenous slippage):
