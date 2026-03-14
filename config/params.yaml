@@ -67,6 +67,11 @@ signals:
     convexity_min_points: 4          # regression points for full confidence (denominator)
     convexity_max: +0.50         # slope beyond this is treated as fully anti-fragile
     lookback_years: 5
+    wacc_use_beta: true              # enable beta-adjusted WACC (false → current rf+erp behavior)
+    wacc_beta_default: 1.0           # fallback beta when insufficient price history
+    wacc_beta_min_obs: 120           # minimum trading days for reliable beta regression
+    wacc_cost_of_debt: 0.05          # assumed pre-tax cost of debt (5%)
+    wacc_tax_shield: 0.21            # corporate tax rate for interest deductibility
 
 physical:
   # EROEI logistic damper (eq 4): X_E = 1 / (1 + exp(κ · (ECS_proxy − ECS_crit)))

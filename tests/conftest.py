@@ -270,6 +270,11 @@ def params():
                 "convexity_min_points": 4,
                 "convexity_max":        0.50,
                 "lookback_years":       5,
+                "wacc_use_beta":        True,
+                "wacc_beta_default":    1.0,
+                "wacc_beta_min_obs":    120,
+                "wacc_cost_of_debt":    0.05,
+                "wacc_tax_shield":      0.21,
             },
         },
         "physical": {

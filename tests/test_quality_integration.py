@@ -447,3 +447,167 @@ def test_convexity_confidence_attenuation(conn, params):
     # With convexity_min_points=4 in params, 2 data points / max(4, 5) = 0.4 confidence
     # vs 5 data points / max(4, 5) = 1.0 confidence
     assert conf_few < 1.0, f"Few points should have confidence < 1.0, got {conf_few}"
+
+
+# ---------------------------------------------------------------------------
+# Beta-adjusted WACC (Fix 2)
+# ---------------------------------------------------------------------------
+
+def _insert_prices(conn, ticker, n_days=400, start_price=100.0, vol=0.02):
+    """Insert synthetic prices into the DB for beta tests."""
+    import numpy as np
+    from datetime import date, timedelta
+    from src.data.db import upsert_prices
+
+    rng = np.random.default_rng(seed=hash(ticker) % (2**32))
+    dates = [date(2022, 1, 3) + timedelta(days=i) for i in range(n_days)]
+    prices = [start_price]
+    for _ in range(n_days - 1):
+        prices.append(prices[-1] * (1 + rng.normal(0.0003, vol)))
+
+    df = pd.DataFrame({
+        "ticker":    ticker,
+        "date":      dates,
+        "open":      [p * 0.99 for p in prices],
+        "high":      [p * 1.01 for p in prices],
+        "low":       [p * 0.98 for p in prices],
+        "close":     prices,
+        "adj_close": prices,
+        "volume":    [int(1e6)] * n_days,
+        "currency":  "USD",
+        "source":    "test",
+    })
+    upsert_prices(conn, df)
+
+
+def test_wacc_beta_adjusted_spread(conn, fundamentals_etn, params):
+    """Insert price data for ETN + SPY, verify spread differs from simple rf+erp."""
+    upsert_fundamentals_annual(conn, fundamentals_etn)
+    _insert_macro(conn, params)
+    _insert_prices(conn, "ETN", n_days=400, start_price=250.0)
+    _insert_prices(conn, "SPY", n_days=400, start_price=450.0, vol=0.01)
+
+    # Beta-adjusted WACC
+    spread_beta, conf_beta = compute_roic_wacc_spread("ETN", conn, params, AS_OF, "US")
+
+    # Simple WACC (beta disabled)
+    import copy
+    params_no_beta = copy.deepcopy(params)
+    params_no_beta["signals"]["quality"]["wacc_use_beta"] = False
+    spread_simple, conf_simple = compute_roic_wacc_spread("ETN", conn, params_no_beta, AS_OF, "US")
+
+    assert isinstance(spread_beta, float)
+    assert conf_beta > 0
+    # With beta and leverage, the WACC changes, so the spread should differ
+    assert spread_beta != pytest.approx(spread_simple, abs=1e-6), \
+        "Beta-adjusted spread should differ from simple rf+erp spread"
+
+
+def test_wacc_beta_disabled_matches_old_behavior(conn, fundamentals_etn, params):
+    """Set wacc_use_beta: False, verify spread matches old rf + erp calculation."""
+    import copy
+    params_disabled = copy.deepcopy(params)
+    params_disabled["signals"]["quality"]["wacc_use_beta"] = False
+
+    upsert_fundamentals_annual(conn, fundamentals_etn)
+    _insert_macro(conn, params_disabled)
+
+    spread, conf = compute_roic_wacc_spread("ETN", conn, params_disabled, AS_OF, "US")
+
+    # Manually compute: WACC = rf + erp (old behavior)
+    from src.data.macro import get_risk_free_rate
+    rf = get_risk_free_rate(conn, "US", AS_OF, params_disabled, as_of_tk=AS_OF)
+    erp = params_disabled["return_estimation"]["equity_risk_premium"]
+    expected_wacc = rf + erp
+
+    # ROIC from synthetic data (nopat / invested_capital)
+    from src.data.db import get_latest_fundamentals
+    df = get_latest_fundamentals(conn, "ETN", n_years=1, as_of_date=AS_OF)
+    roic = df["roic"].dropna().iloc[0]
+    expected_spread = roic - expected_wacc
+
+    assert spread == pytest.approx(expected_spread, rel=1e-6)
+
+
+def test_wacc_beta_no_price_data_uses_default(conn, fundamentals_etn, params):
+    """No price data -> beta_valid=False -> confidence gets -0.15 penalty."""
+    upsert_fundamentals_annual(conn, fundamentals_etn)
+    _insert_macro(conn, params)
+    # Don't insert any prices — beta fallback to default
+
+    spread, conf = compute_roic_wacc_spread("ETN", conn, params, AS_OF, "US")
+    assert isinstance(spread, float)
+    # With source="test", base confidence = 1.0, penalty = -0.15 -> 0.85
+    assert conf == pytest.approx(0.85, abs=0.01), \
+        f"Expected confidence ~0.85 (1.0 - 0.15 penalty), got {conf}"
+
+
+def test_wacc_leveraged_vs_unleveraged(conn, params):
+    """Leveraged stock should have different WACC than unleveraged stock.
+    With debt, WACC blends cost of equity with after-tax cost of debt."""
+    _insert_macro(conn, params)
+
+    # Stock A: has debt (leveraged) — equity=3B, debt=1B
+    rows_a = []
+    for fy in [2023, 2024]:
+        rev, equity, debt = 5e9, 3e9, 1e9
+        cash, gw = 0.5e9, 0.5e9
+        ic = equity + debt - cash - gw
+        ebit = rev * 0.15
+        nopat = ebit * 0.79
+        rows_a.append({
+            "ticker": "LEVERED", "fiscal_year": fy,
+            "report_date": date(fy, 12, 31), "currency": "USD",
+            "accounting_std": "GAAP", "source": "test",
+            "revenue": rev, "gross_profit": rev * 0.40, "ebit": ebit,
+            "net_income": ebit * 0.75, "interest_expense": debt * 0.04,
+            "tax_expense": ebit * 0.21, "total_assets": equity + debt,
+            "total_equity": equity, "total_debt": debt, "cash": cash,
+            "goodwill": gw, "intangible_assets": 0.2e9,
+            "right_of_use_assets": None, "lease_liabilities": None,
+            "capex": rev * 0.04, "gross_margin": 0.40, "invested_capital": ic,
+            "nopat": nopat, "roic": nopat / ic, "effective_tax_rate": 0.21,
+        })
+
+    # Stock B: no debt (all-equity) — equity=4B, debt=0
+    rows_b = []
+    for fy in [2023, 2024]:
+        rev, equity, debt = 5e9, 4e9, 0.0
+        cash, gw = 0.5e9, 0.5e9
+        ic = equity - cash - gw
+        ebit = rev * 0.15
+        nopat = ebit * 0.79
+        rows_b.append({
+            "ticker": "UNLEVERED", "fiscal_year": fy,
+            "report_date": date(fy, 12, 31), "currency": "USD",
+            "accounting_std": "GAAP", "source": "test",
+            "revenue": rev, "gross_profit": rev * 0.40, "ebit": ebit,
+            "net_income": ebit * 0.75, "interest_expense": 0.0,
+            "tax_expense": ebit * 0.21, "total_assets": equity,
+            "total_equity": equity, "total_debt": debt, "cash": cash,
+            "goodwill": gw, "intangible_assets": 0.2e9,
+            "right_of_use_assets": None, "lease_liabilities": None,
+            "capex": rev * 0.04, "gross_margin": 0.40, "invested_capital": ic,
+            "nopat": nopat, "roic": nopat / ic, "effective_tax_rate": 0.21,
+        })
+
+    upsert_fundamentals_annual(conn, pd.DataFrame(rows_a))
+    upsert_fundamentals_annual(conn, pd.DataFrame(rows_b))
+
+    # No price data -> both use default beta=1.0, but leverage differs
+    spread_lev, conf_lev = compute_roic_wacc_spread("LEVERED", conn, params, AS_OF, "US")
+    spread_unlev, conf_unlev = compute_roic_wacc_spread("UNLEVERED", conn, params, AS_OF, "US")
+
+    # Both should be valid
+    import math
+    assert not math.isnan(spread_lev)
+    assert not math.isnan(spread_unlev)
+
+    # Leveraged stock should have different spread (lower WACC due to tax shield on debt)
+    assert spread_lev != pytest.approx(spread_unlev, abs=1e-6), \
+        f"Leveraged ({spread_lev}) and unleveraged ({spread_unlev}) should have different spreads"
+
+    # Leveraged WACC should be lower (after-tax cost of debt < cost of equity),
+    # so spread should be higher for leveraged stock
+    assert spread_lev > spread_unlev, \
+        f"Leveraged spread ({spread_lev}) should be > unleveraged ({spread_unlev}) due to tax shield"
