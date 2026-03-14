@@ -196,3 +196,62 @@ def test_batch_crowding_scores_bounds(conn, sample_universe, all_prices, params)
     upsert_prices(conn, all_prices)
     result = batch_crowding_scores(sample_universe, conn, params, AS_OF)
     assert (result["crowding_score"].between(0, 1)).all()
+
+
+# ---------------------------------------------------------------------------
+# Coverage penalty (Fix 3)
+# ---------------------------------------------------------------------------
+
+def test_crowding_coverage_penalty_few_components(conn, params):
+    """Stock with only 2 active components gets lower crowding_confidence than one with 4+.
+
+    With min_components_full_confidence=4, a stock with 2 components should have
+    coverage_factor = max(0.40, 2/4) = 0.50, halving its confidence.
+    """
+    upsert_prices(conn, _make_prices("FEW", vol=0.015))
+    # Only autocorr + absorption are active (2 components) — no optional data in DB
+    result = compute_crowding_score(
+        "FEW", conn, params, AS_OF,
+        absorption_delta=0.05, absorption_conf=0.8,
+    )
+    # With 2 components and min_comp=4: coverage_factor = max(0.40, 2/4) = 0.50
+    # So confidence should be at most half of what it would be without penalty.
+    # Compute the unpenalised confidence for comparison.
+    import copy
+    params_no_penalty = copy.deepcopy(params)
+    params_no_penalty["signals"]["crowding"]["min_components_full_confidence"] = 2
+    result_no_penalty = compute_crowding_score(
+        "FEW", conn, params_no_penalty, AS_OF,
+        absorption_delta=0.05, absorption_conf=0.8,
+    )
+    assert result["crowding_confidence"] < result_no_penalty["crowding_confidence"], (
+        f"Penalised conf {result['crowding_confidence']} should be < "
+        f"unpenalised conf {result_no_penalty['crowding_confidence']}"
+    )
+    # Score should be unchanged (penalty only affects confidence)
+    assert result["crowding_score"] == result_no_penalty["crowding_score"]
+
+
+def test_crowding_coverage_penalty_absent_params(conn, params):
+    """When min_components_full_confidence is absent, no penalty applied (backward compat)."""
+    import copy
+    params_absent = copy.deepcopy(params)
+    del params_absent["signals"]["crowding"]["min_components_full_confidence"]
+    del params_absent["signals"]["crowding"]["coverage_penalty_floor"]
+
+    upsert_prices(conn, _make_prices("COMPAT", vol=0.015))
+
+    result_absent = compute_crowding_score(
+        "COMPAT", conn, params_absent, AS_OF,
+        absorption_delta=0.05, absorption_conf=0.8,
+    )
+    # Fallback min_comp=2, and with 2 components active: n_active >= min_comp → no penalty
+    # So confidence should equal what we'd get with explicit min_comp=2
+    params_explicit = copy.deepcopy(params)
+    params_explicit["signals"]["crowding"]["min_components_full_confidence"] = 2
+    result_explicit = compute_crowding_score(
+        "COMPAT", conn, params_explicit, AS_OF,
+        absorption_delta=0.05, absorption_conf=0.8,
+    )
+    assert result_absent["crowding_confidence"] == result_explicit["crowding_confidence"]
+    assert result_absent["crowding_score"] == result_explicit["crowding_score"]

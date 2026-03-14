@@ -52,6 +52,25 @@ signals:
     short_interest_window: 30    # days to average short_pct_float for current reading
     short_interest_high: 0.25    # pct_float threshold → score = 1.0 (fully crowded)
     short_interest_low: 0.05     # pct_float threshold → score = 0.0 (no signal)
+    # Enhanced short interest parameters (prime broker data)
+    cost_to_borrow_high: 0.10    # annualized CTB at which sub-score = 1.0
+    utilization_high: 0.80       # share utilization at which sub-score = 1.0
+    # Gamma exposure — dealer gamma hedging flow as crowding signal.
+    # Negative GEX = dealers short gamma = destabilizing forced flows = high crowding risk.
+    csd_omega_gamma: 0.10        # weight for dealer gamma exposure sub-score
+    gamma_lookback_days: 5       # days to average net GEX
+    gamma_threshold_low: -0.5    # normalized GEX below this → score = 1.0 (max crowding)
+    gamma_threshold_high: 0.5    # normalized GEX above this → score = 0.0 (no signal)
+    # IV Skew — OTM put premium over ATM call as crowding signal.
+    csd_omega_iv_skew: 0.10      # weight for IV skew sub-score
+    skew_threshold_low: 1.0      # skew below this → score = 0 (normal)
+    skew_threshold_high: 1.4     # skew above this → score = 1 (max crowding)
+    # Put/Call Ratio — OI-weighted put/call as bearish crowding signal.
+    csd_omega_put_call: 0.10     # weight for put/call ratio sub-score
+    pc_threshold_low: 0.5        # ratio below this → score = 0
+    pc_threshold_high: 1.5       # ratio above this → score = 1
+    min_components_full_confidence: 4  # need ≥4 active components for full confidence
+    coverage_penalty_floor: 0.40       # minimum coverage factor (don't fully zero out)
 
   quality:
     roic_wacc_spread_min: 0.0    # hard gate: ROIC ≤ WACC → X_P = 0
