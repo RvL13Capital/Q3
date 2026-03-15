@@ -516,7 +516,7 @@ def test_wacc_beta_disabled_matches_old_behavior(conn, fundamentals_etn, params)
 
     # Manually compute: WACC = rf + erp (old behavior)
     from src.data.macro import get_risk_free_rate
-    rf = get_risk_free_rate(conn, "US", AS_OF, params_disabled, as_of_tk=AS_OF)
+    rf = get_risk_free_rate(conn, "US", AS_OF, params_disabled)
     erp = params_disabled["return_estimation"]["equity_risk_premium"]
     expected_wacc = rf + erp
 

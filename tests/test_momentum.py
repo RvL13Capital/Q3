@@ -81,7 +81,10 @@ def _make_price_df(
     currency: str = "USD",
 ) -> pd.DataFrame:
     """Build a synthetic price DataFrame suitable for upsert_prices."""
-    rng = np.random.default_rng(seed=abs(hash(ticker)) % (2 ** 32))
+    # Use deterministic seed: hashlib instead of hash() which is randomized per-process
+    import hashlib
+    _seed = int(hashlib.md5(ticker.encode()).hexdigest(), 16) % (2 ** 32)
+    rng = np.random.default_rng(seed=_seed)
     end_date   = date.fromisoformat(AS_OF)
     start_date = end_date - timedelta(days=n_days - 1)
     all_dates  = [start_date + timedelta(days=i) for i in range(n_days)]
