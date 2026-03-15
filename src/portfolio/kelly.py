@@ -432,7 +432,7 @@ def compute_kelly_weights(
 
     # Pre-fetch rf rates once per region.
     regions  = universe_df["region"].unique().tolist()
-    rf_cache = {r: get_risk_free_rate(conn, r, as_of_date, params, as_of_tk=as_of_date) for r in regions}
+    rf_cache = {r: get_risk_free_rate(conn, r, as_of_date, params) for r in regions}
 
     # Batch-fetch f_old and daily dollar volume (replaces per-stock DB queries)
     candidate_tickers = candidates["ticker"].tolist()

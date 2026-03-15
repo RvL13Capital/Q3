@@ -131,7 +131,7 @@ def compute_roic_wacc_spread(
         return float("nan"), 0.0
 
     rf = rf_cache[region] if (rf_cache and region in rf_cache) else \
-        get_risk_free_rate(conn, region, as_of_date, params, as_of_tk=as_of_date)
+        get_risk_free_rate(conn, region, as_of_date, params)
     erp = params["return_estimation"]["equity_risk_premium"]
 
     q_params = params.get("signals", {}).get("quality", {})
@@ -268,8 +268,7 @@ def compute_inflation_convexity(
 
     # Annual average PPI for each fiscal year (from monthly YoY series)
     ppi_series = get_inflation_yoy(conn, region, "ppi", as_of_date, params,
-                                   lookback_months=(lookback_years + 1) * 12,
-                                   as_of_tk=as_of_date)
+                                   lookback_months=(lookback_years + 1) * 12)
     if ppi_series.empty:
         return float("nan"), 0.0
 

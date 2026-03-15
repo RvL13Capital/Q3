@@ -229,7 +229,7 @@ def run_weekly_scoring(
 
     # Pre-fetch rf rates once per region for the mu_base calculation.
     regions  = universe_df["region"].unique().tolist()
-    rf_cache = {r: get_risk_free_rate(conn, r, as_of_date, params, as_of_tk=as_of_date) for r in regions}
+    rf_cache = {r: get_risk_free_rate(conn, r, as_of_date, params) for r in regions}
 
     # Index sub-score DataFrames for O(1) lookup (preserve "ticker" key in each row dict).
     p_idx = {r["ticker"]: r.to_dict() for _, r in physical_df.iterrows()}  if not physical_df.empty  else {}
