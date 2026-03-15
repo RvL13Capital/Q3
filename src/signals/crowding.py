@@ -395,7 +395,45 @@ def compute_crowding_score(
                 short_score = ss
                 components.append((omega_si, ss, sc))
         except Exception as e:
-            logger.debug(f"Short interest unavailable for {ticker}: {e}")
+            logger.info(f"Short interest unavailable for {ticker}: {e}")
+
+    # Gamma exposure (dealer hedging flows)
+    if conn is not None:
+        try:
+            gs, gc = compute_gamma_exposure_score(ticker, conn, params, as_of_date)
+            if gc > 0:
+                gamma_score = gs
+                components.append((omega_gamma, gs, gc))
+        except Exception as e:
+            logger.info(f"Gamma exposure unavailable for {ticker}: {e}")
+
+    # IV Skew + Put/Call Ratio (options-derived crowding signals)
+    # Single DB fetch for both to avoid redundant queries
+    if conn is not None:
+        try:
+            from src.data.db import get_gamma_data
+            from src.signals.options_signals import compute_iv_skew_score, compute_put_call_score
+            gd = get_gamma_data(conn, ticker, as_of_date, lookback_days=1)
+            if not gd.empty:
+                row0 = gd.iloc[0]
+                # IV Skew sub-component
+                if "implied_vol_skew" in gd.columns:
+                    skew_val = row0.get("implied_vol_skew")
+                    if pd.notna(skew_val):
+                        iv_s = compute_iv_skew_score(float(skew_val), params)
+                        if not math.isnan(iv_s):
+                            iv_skew_score_val = iv_s
+                            components.append((omega_iv_skew, iv_s, 1.0))
+                # Put/Call Ratio sub-component
+                if "put_call_ratio" in gd.columns:
+                    pc_val = row0.get("put_call_ratio")
+                    if pd.notna(pc_val):
+                        pc_s = compute_put_call_score(float(pc_val), params)
+                        if not math.isnan(pc_s):
+                            put_call_score_val = pc_s
+                            components.append((omega_pc, pc_s, 1.0))
+        except Exception as e:
+            logger.info(f"Options signals unavailable for {ticker}: {e}")
 
     # Renormalise weights over active components
     total_w = sum(c[0] for c in components)
@@ -407,6 +445,15 @@ def compute_crowding_score(
             sum(c[0] * c[1] for c in components) / total_w
         ))
         crowding_conf = sum(c[0] * c[2] for c in components) / total_w
+
+    # Coverage penalty: fewer active components → lower confidence (Fix 3)
+    c_params = params.get("signals", {}).get("crowding", {})
+    min_comp = c_params.get("min_components_full_confidence", 2)
+    coverage_floor = c_params.get("coverage_penalty_floor", 0.40)
+    n_active = len(components)
+    if min_comp > 0 and n_active < min_comp:
+        coverage_factor = max(coverage_floor, n_active / min_comp)
+        crowding_conf *= coverage_factor
 
     return {
         "ticker":              ticker,

@@ -3,13 +3,15 @@ Unit tests for Kelly sizing and portfolio construction.
 No external API calls or DuckDB needed.
 """
 import pytest
+import numpy as np
 import pandas as pd
 import sys
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.portfolio.kelly import kelly_fraction
+from src.portfolio.kelly import kelly_fraction, compute_kelly_weights
 from src.portfolio.construction import apply_constraints
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -397,3 +399,386 @@ def test_constraints_idempotent():
     w1 = result1.set_index("ticker")["weight"].sort_index()
     w2 = result2.set_index("ticker")["weight"].sort_index()
     assert (abs(w1 - w2) < 0.001).all()
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Momentum boost tests (proto-μ_NN — symmetric swing_score overlay)
+# ────────────────────────────────────────────────────────────────────────────
+
+def test_momentum_boost_positive():
+    """Strong momentum (swing=0.85, conf=0.90, beta=0.50) → larger Kelly than baseline."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    f_base, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25)
+    f_boosted, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=0.85, swing_confidence=0.90, momentum_boost_beta=0.50,
+    )
+    assert f_boosted > f_base
+
+
+def test_momentum_boost_negative():
+    """Weak momentum (swing=0.15, conf=0.90, beta=0.50) → smaller Kelly than baseline."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    f_base, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25)
+    f_discounted, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=0.15, swing_confidence=0.90, momentum_boost_beta=0.50,
+    )
+    assert f_discounted < f_base
+
+
+def test_momentum_boost_neutral_unchanged():
+    """Neutral momentum (swing=0.50) → no change from baseline."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    f_base, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25)
+    f_neutral, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=0.50, swing_confidence=0.90, momentum_boost_beta=0.50,
+    )
+    assert f_neutral == pytest.approx(f_base, abs=1e-6)
+
+
+def test_momentum_boost_none_swing_unchanged():
+    """swing_score=None → no boost → identical to baseline."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    f_base, fraw_base = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25)
+    f_none, fraw_none = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=None, swing_confidence=None, momentum_boost_beta=0.50,
+    )
+    assert f_none == pytest.approx(f_base, abs=1e-9)
+    assert fraw_none == pytest.approx(fraw_base, abs=1e-9)
+
+
+def test_momentum_boost_beta_zero_disabled():
+    """beta=0.0 → momentum has zero effect regardless of swing_score."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    f_base, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25)
+    f_beta0, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=1.0, swing_confidence=1.0, momentum_boost_beta=0.0,
+    )
+    assert f_beta0 == pytest.approx(f_base, abs=1e-9)
+
+
+def test_momentum_boost_confidence_gates():
+    """swing_confidence=0.0 → no boost even with extreme swing_score."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    f_base, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25)
+    f_no_conf, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=1.0, swing_confidence=0.0, momentum_boost_beta=0.50,
+    )
+    assert f_no_conf == pytest.approx(f_base, abs=1e-9)
+
+
+def test_momentum_boost_bounded():
+    """Boost multiplier is bounded: μ_boosted ∈ [(1-β)·μ, (1+β)·μ]."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    beta = 0.50
+
+    # Max boost: swing=1.0, conf=1.0 → μ *= 1.50
+    f_max, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=1.0, swing_confidence=1.0, momentum_boost_beta=beta,
+    )
+    # Compare to manually boosted μ
+    f_manual_max, _ = kelly_fraction(mu=mu * 1.50, sigma=sigma, rf=rf, fraction=0.25)
+    assert f_max == pytest.approx(f_manual_max, abs=1e-6)
+
+    # Max discount: swing=0.0, conf=1.0 → μ *= 0.50
+    f_min, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=0.0, swing_confidence=1.0, momentum_boost_beta=beta,
+    )
+    f_manual_min, _ = kelly_fraction(mu=mu * 0.50, sigma=sigma, rf=rf, fraction=0.25)
+    assert f_min == pytest.approx(f_manual_min, abs=1e-6)
+
+
+def test_momentum_boost_with_epist_and_impact():
+    """Momentum boost composes correctly with σ_epist and market impact."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+    # Baseline with epist + impact but no momentum
+    f_base, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        sigma_epist=0.10, lambda_epist=0.25,
+        aum=50_000_000, daily_dollar_volume=20_000_000,
+    )
+    # Same but with positive momentum
+    f_boosted, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        sigma_epist=0.10, lambda_epist=0.25,
+        aum=50_000_000, daily_dollar_volume=20_000_000,
+        swing_score=0.80, swing_confidence=0.85, momentum_boost_beta=0.50,
+    )
+    assert f_boosted > f_base
+    assert f_boosted > 0
+    assert f_boosted <= 1.0
+
+
+def test_momentum_boost_cannot_rescue_below_rf():
+    """mu <= rf is checked BEFORE boost — momentum cannot create alpha where fundamentals say none.
+
+    This is intentional (Physical Anchoring, Principle II): momentum modulates
+    existing positive excess return, it does not generate it.  A stock whose
+    fundamental μ ≤ rf is excluded regardless of momentum strength.
+    """
+    rf = 0.04
+    mu_below_rf = 0.039  # just below risk-free rate
+    # Even with maximum momentum boost (swing=1.0, conf=1.0, beta=0.50)
+    # which would make μ_boosted = 0.039 * 1.50 = 0.0585 > rf,
+    # the position is still killed because the guard fires first.
+    f_adj, f_raw = kelly_fraction(
+        mu=mu_below_rf, sigma=0.30, rf=rf, fraction=0.25,
+        swing_score=1.0, swing_confidence=1.0, momentum_boost_beta=0.50,
+    )
+    assert f_adj == 0.0
+    assert f_raw == 0.0
+
+
+def test_momentum_boost_discount_kills_marginal_position():
+    """Strong negative momentum can push μ_boosted below rf → position correctly killed."""
+    mu, sigma, rf = 0.06, 0.30, 0.04
+    # Without boost: mu - rf = 0.02 > 0, so position is taken
+    f_base, _ = kelly_fraction(mu=mu, sigma=sigma, rf=rf, fraction=0.25)
+    assert f_base > 0
+
+    # Max discount: swing=0.0, conf=1.0, beta=0.50 → μ *= 0.50 → μ_boosted = 0.03 < rf
+    f_killed, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=0.0, swing_confidence=1.0, momentum_boost_beta=0.50,
+    )
+    assert f_killed == 0.0
+
+
+def test_momentum_boost_clamps_out_of_range_swing_score():
+    """swing_score outside [0,1] is clamped — multiplier stays bounded."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+
+    # swing_score=1.5 should be clamped to 1.0 → same as swing_score=1.0
+    f_over, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=1.5, swing_confidence=1.0, momentum_boost_beta=0.50,
+    )
+    f_max, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=1.0, swing_confidence=1.0, momentum_boost_beta=0.50,
+    )
+    assert f_over == pytest.approx(f_max, abs=1e-9)
+
+    # swing_score=-0.5 should be clamped to 0.0 → same as swing_score=0.0
+    f_under, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=-0.5, swing_confidence=1.0, momentum_boost_beta=0.50,
+    )
+    f_min, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=0.0, swing_confidence=1.0, momentum_boost_beta=0.50,
+    )
+    assert f_under == pytest.approx(f_min, abs=1e-9)
+
+
+def test_momentum_boost_clamps_out_of_range_confidence():
+    """swing_confidence outside [0,1] is clamped — multiplier stays bounded."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+
+    # confidence=2.0 should be clamped to 1.0
+    f_over, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=0.85, swing_confidence=2.0, momentum_boost_beta=0.50,
+    )
+    f_max_conf, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=0.85, swing_confidence=1.0, momentum_boost_beta=0.50,
+    )
+    assert f_over == pytest.approx(f_max_conf, abs=1e-9)
+
+
+def test_momentum_boost_clamps_beta_above_one():
+    """beta > 1.0 is clamped to 1.0 — prevents μ negation."""
+    mu, sigma, rf = 0.15, 0.30, 0.04
+
+    # beta=2.0 should be clamped to 1.0
+    f_beta2, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=0.85, swing_confidence=1.0, momentum_boost_beta=2.0,
+    )
+    f_beta1, _ = kelly_fraction(
+        mu=mu, sigma=sigma, rf=rf, fraction=0.25,
+        swing_score=0.85, swing_confidence=1.0, momentum_boost_beta=1.0,
+    )
+    assert f_beta2 == pytest.approx(f_beta1, abs=1e-9)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Blended σ_epist tests (Fix 5)
+# ────────────────────────────────────────────────────────────────────────────
+
+def _make_scored_df(ticker="ETN", composite_confidence=0.80,
+                    physical_confidence=0.5, quality_confidence=0.5,
+                    crowding_confidence=0.5, mu_estimate=0.15,
+                    composite_score=0.60):
+    """Helper: minimal scored DataFrame for a single candidate."""
+    return pd.DataFrame([{
+        "ticker": ticker,
+        "entry_signal": True,
+        "composite_score": composite_score,
+        "composite_confidence": composite_confidence,
+        "physical_confidence": physical_confidence,
+        "quality_confidence": quality_confidence,
+        "crowding_confidence": crowding_confidence,
+        "mu_estimate": mu_estimate,
+        "swing_score": None,
+        "swing_confidence": None,
+    }])
+
+
+def _make_universe_df(ticker="ETN", region="US", bucket="grid"):
+    """Helper: minimal universe DataFrame."""
+    return pd.DataFrame([{
+        "ticker": ticker,
+        "region": region,
+        "primary_bucket": bucket,
+    }])
+
+
+def _base_params(**kelly_overrides):
+    """Minimal params dict for compute_kelly_weights."""
+    kelly = {
+        "fraction": 0.25,
+        "aum_eur": 0,
+        "impact_scaling": 1.0,
+        "lambda_epist": 0.25,
+        "not_aus_confidence": 0.20,
+        "eta_participation": 0.0,
+        "momentum_boost_beta": 0.0,
+        "use_shrunk_cov": False,
+        "sigma_epist_model_weight": 0.0,
+        "sigma_epist_vol_of_vol_window": 60,
+    }
+    kelly.update(kelly_overrides)
+    return {"kelly": kelly, "macro": {"us_risk_free_series": "US_10Y", "eu_risk_free_series": "EU_10Y_DE"}}
+
+
+@patch("src.portfolio.kelly.batch_estimate_daily_dollar_volume", return_value={})
+@patch("src.portfolio.kelly.batch_get_last_kelly_fractions", return_value={})
+@patch("src.data.macro.get_risk_free_rate", return_value=0.04)
+@patch("src.portfolio.kelly.estimate_sigma")
+def test_sigma_epist_model_weight_zero_matches_old(
+    mock_sigma, mock_rf, mock_folds, mock_adv,
+):
+    """With sigma_epist_model_weight=0.0, behavior matches old proxy: sigma_epist = 1 - comp_conf."""
+    mock_sigma.return_value = (0.30, True)
+    conn = MagicMock()
+
+    scored = _make_scored_df(composite_confidence=0.80)
+    universe = _make_universe_df()
+    params = _base_params(sigma_epist_model_weight=0.0)
+
+    result = compute_kelly_weights(scored, conn, params, "2023-06-01", universe)
+
+    assert len(result) == 1
+    # sigma_epist should be 1.0 - 0.80 = 0.20 (pure data proxy)
+    assert result.iloc[0]["sigma_epist"] == pytest.approx(0.20, abs=1e-4)
+
+
+@patch("src.portfolio.kelly.batch_estimate_daily_dollar_volume", return_value={})
+@patch("src.portfolio.kelly.batch_get_last_kelly_fractions", return_value={})
+@patch("src.data.macro.get_risk_free_rate", return_value=0.04)
+@patch("src.portfolio.kelly.estimate_sigma")
+def test_sigma_epist_blended_higher_than_data_only(
+    mock_sigma, mock_rf, mock_folds, mock_adv,
+):
+    """With model_weight > 0 and disagreeing signals, blended sigma_epist > data-only proxy."""
+    # Long-term sigma=0.30, short-term sigma=0.50 → large vol-of-vol mismatch
+    # Also: physical_confidence=0.90, quality=0.30, crowding=0.50 → high CV
+    mock_sigma.side_effect = lambda ticker, conn, as_of_date, window_days=252: (
+        (0.50, True) if window_days == 60 else (0.30, True)
+    )
+    conn = MagicMock()
+
+    scored = _make_scored_df(
+        composite_confidence=0.80,
+        physical_confidence=0.90,
+        quality_confidence=0.30,
+        crowding_confidence=0.50,
+    )
+    universe = _make_universe_df()
+
+    # Data-only (weight=0)
+    params_data = _base_params(sigma_epist_model_weight=0.0)
+    result_data = compute_kelly_weights(scored, conn, params_data, "2023-06-01", universe)
+    sigma_data_only = result_data.iloc[0]["sigma_epist"]
+
+    # Blended (weight=0.5)
+    params_blend = _base_params(sigma_epist_model_weight=0.50)
+    result_blend = compute_kelly_weights(scored, conn, params_blend, "2023-06-01", universe)
+    sigma_blended = result_blend.iloc[0]["sigma_epist"]
+
+    # Blended should be higher because model uncertainty (from vol mismatch + signal dispersion) > 0
+    assert sigma_blended > sigma_data_only
+
+
+@patch("src.portfolio.kelly.batch_estimate_daily_dollar_volume", return_value={})
+@patch("src.portfolio.kelly.batch_get_last_kelly_fractions", return_value={})
+@patch("src.data.macro.get_risk_free_rate", return_value=0.04)
+@patch("src.portfolio.kelly.estimate_sigma")
+def test_sigma_epist_blended_with_agreeing_signals(
+    mock_sigma, mock_rf, mock_folds, mock_adv,
+):
+    """With model_weight > 0 but agreeing signals and stable vol, blended ~ data proxy."""
+    # Same vol at both windows → vol_ratio ≈ 0
+    mock_sigma.return_value = (0.30, True)
+    conn = MagicMock()
+
+    # All confidences equal → CV = 0
+    scored = _make_scored_df(
+        composite_confidence=0.80,
+        physical_confidence=0.60,
+        quality_confidence=0.60,
+        crowding_confidence=0.60,
+    )
+    universe = _make_universe_df()
+
+    params = _base_params(sigma_epist_model_weight=0.50)
+    result = compute_kelly_weights(scored, conn, params, "2023-06-01", universe)
+    sigma_blended = result.iloc[0]["sigma_epist"]
+
+    # With CV=0 and vol_ratio=0, model_uncertainty=0
+    # Blend = 0.5 * 0 + 0.5 * 0.20 = 0.10
+    sigma_data = 0.20  # 1 - 0.80
+    expected = 0.50 * 0.0 + 0.50 * sigma_data  # = 0.10
+    assert sigma_blended == pytest.approx(expected, abs=1e-3)
+
+
+@patch("src.portfolio.kelly.batch_estimate_daily_dollar_volume", return_value={})
+@patch("src.portfolio.kelly.batch_get_last_kelly_fractions", return_value={})
+@patch("src.data.macro.get_risk_free_rate", return_value=0.04)
+@patch("src.portfolio.kelly.estimate_sigma")
+def test_sigma_epist_vol_of_vol_dominates(
+    mock_sigma, mock_rf, mock_folds, mock_adv,
+):
+    """When short-term vol diverges significantly from long-term, vol_ratio drives model uncertainty."""
+    # sigma_short=0.60, sigma_long=0.30 → vol_ratio = |0.60-0.30|/0.30 = 1.0 (capped)
+    mock_sigma.side_effect = lambda ticker, conn, as_of_date, window_days=252: (
+        (0.60, True) if window_days == 60 else (0.30, True)
+    )
+    conn = MagicMock()
+
+    # Equal confidences → CV = 0, but vol_ratio = 1.0
+    scored = _make_scored_df(
+        composite_confidence=0.90,
+        physical_confidence=0.70,
+        quality_confidence=0.70,
+        crowding_confidence=0.70,
+    )
+    universe = _make_universe_df()
+
+    params = _base_params(sigma_epist_model_weight=0.50)
+    result = compute_kelly_weights(scored, conn, params, "2023-06-01", universe)
+    sigma_blended = result.iloc[0]["sigma_epist"]
+
+    # model_uncertainty = max(0, 1.0) = 1.0
+    # sigma_data = 0.10
+    # blend = 0.5 * 1.0 + 0.5 * 0.10 = 0.55
+    assert sigma_blended == pytest.approx(0.55, abs=0.02)

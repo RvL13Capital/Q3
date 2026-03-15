@@ -291,3 +291,323 @@ def test_batch_quality_scores_missing_ticker(conn, sample_universe, params):
     # No fundamentals → roic_conf=0 → hard gate → quality_score=0.0
     ccj_score = result[result["ticker"] == "CCJ"]["quality_score"].iloc[0]
     assert ccj_score == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# Convexity cap and confidence attenuation (Fix 1)
+# ---------------------------------------------------------------------------
+
+def _insert_high_convexity_company(conn, params, ticker="CAPTEST", gm_series=None,
+                                    ppi_values=None):
+    """Insert a company with rising margins and rising PPI for convexity tests.
+
+    Returns fundamentals DataFrame for reference.
+    """
+    if gm_series is None:
+        # Strong pricing power: margins rise sharply with PPI
+        gm_series = [0.30, 0.33, 0.37, 0.42, 0.48, 0.55]
+    if ppi_values is None:
+        ppi_values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+
+    rows = []
+    for i, gm in enumerate(gm_series):
+        fy = 2019 + i
+        rev = 5e9
+        gp = rev * gm
+        ebit = rev * 0.20  # high ROIC to pass hard gate
+        equity, debt, cash, gw = 3e9, 1e9, 0.5e9, 0.5e9
+        ic = equity + debt - cash - gw
+        nopat = ebit * 0.79
+        rows.append({
+            "ticker": ticker, "fiscal_year": fy,
+            "report_date": date(fy, 12, 31), "currency": "USD",
+            "accounting_std": "GAAP", "source": "test",
+            "revenue": rev, "gross_profit": gp, "ebit": ebit,
+            "net_income": ebit * 0.75, "interest_expense": debt * 0.04,
+            "tax_expense": ebit * 0.21, "total_assets": equity + debt,
+            "total_equity": equity, "total_debt": debt, "cash": cash,
+            "goodwill": gw, "intangible_assets": 0.2e9,
+            "right_of_use_assets": None, "lease_liabilities": None,
+            "capex": rev * 0.04, "gross_margin": gm, "invested_capital": ic,
+            "nopat": nopat, "roic": nopat / ic, "effective_tax_rate": 0.21,
+        })
+    fund_df = pd.DataFrame(rows)
+    upsert_fundamentals_annual(conn, fund_df)
+
+    # PPI series aligned to fiscal years
+    macro_rows = []
+    for i, ppi_val in enumerate(ppi_values):
+        yr = 2019 + i
+        for m in range(1, 13):
+            macro_rows.append({"date": date(yr, m, 28).isoformat(),
+                                "value": ppi_val, "source": "test"})
+    upsert_macro(conn, params["macro"]["us_ppi_series"], pd.DataFrame(macro_rows))
+
+    # Insert yields so WACC can be computed
+    yield_rows = pd.DataFrame({
+        "date": [date(2019 + i // 365, 1, 1) + timedelta(days=i % 365)
+                 for i in range(2500)],
+        "source": "test",
+    })
+    yield_rows["date"] = yield_rows["date"].apply(lambda d: d.isoformat())
+    yield_rows["value"] = 4.3
+    upsert_macro(conn, params["macro"]["us_risk_free_series"], yield_rows)
+
+    return fund_df
+
+
+def test_convexity_cap_limits_multiplier(conn, params):
+    """With slope=0.5 and γ=2.0, uncapped exp(1.0)=2.72.
+    After confidence attenuation and hard cap at 1.50, the quality_score
+    must be bounded by the cap effect."""
+    _insert_high_convexity_company(conn, params, ticker="CAPTEST")
+
+    result = compute_quality_score("CAPTEST", conn, params, "2024-12-31", "US")
+    assert result["quality_score"] > 0.0, "Should have positive quality score"
+
+    # Now compute without cap to verify capping is active
+    import copy
+    params_uncapped = copy.deepcopy(params)
+    del params_uncapped["signals"]["quality"]["convexity_cap"]
+    result_uncapped = compute_quality_score("CAPTEST", conn, params_uncapped, "2024-12-31", "US")
+
+    # The capped score should be <= uncapped score (cap reduces amplification)
+    assert result["quality_score"] <= result_uncapped["quality_score"], \
+        f"Capped {result['quality_score']} should be <= uncapped {result_uncapped['quality_score']}"
+
+
+def test_convexity_cap_absent_no_cap(conn, params):
+    """When convexity_cap is missing from params, old uncapped behavior is preserved."""
+    import copy, math
+    params_no_cap = copy.deepcopy(params)
+    del params_no_cap["signals"]["quality"]["convexity_cap"]
+
+    _insert_high_convexity_company(conn, params_no_cap, ticker="NOCAP")
+
+    # Compute convexity to verify it's positive
+    convexity, conf = compute_inflation_convexity(
+        "NOCAP", conn, params_no_cap, "2024-12-31", "US", lookback_years=5
+    )
+    assert convexity > 0, f"Expected positive convexity, got {convexity}"
+
+    # With no cap, the quality score should still be valid [0, 1]
+    result = compute_quality_score("NOCAP", conn, params_no_cap, "2024-12-31", "US")
+    assert 0.0 <= result["quality_score"] <= 1.0
+
+    # Verify that the conv_factor is not artificially limited:
+    # Since there's no cap param, the default is inf, so attenuation still applies
+    # but there's no hard ceiling. The score should be >= what a capped version produces.
+    params_capped = copy.deepcopy(params)  # has convexity_cap: 1.50
+    result_capped = compute_quality_score("NOCAP", conn, params_capped, "2024-12-31", "US")
+    assert result["quality_score"] >= result_capped["quality_score"], \
+        "Uncapped score should be >= capped score"
+
+
+def test_convexity_confidence_attenuation(conn, params):
+    """Low-confidence convexity (few data points) should produce less amplification
+    than high-confidence convexity (many data points)."""
+    # Few data points (3 years → 2 diffs → low confidence)
+    _insert_high_convexity_company(
+        conn, params, ticker="FEWPTS",
+        gm_series=[0.30, 0.38, 0.48],
+        ppi_values=[1.0, 3.0, 5.0],
+    )
+    # Insert yields for FEWPTS
+    yield_rows = pd.DataFrame({
+        "date": [(date(2019, 1, 1) + timedelta(days=i)).isoformat()
+                 for i in range(2500)],
+        "value": 4.3,
+        "source": "test",
+    })
+    upsert_macro(conn, params["macro"]["us_risk_free_series"], yield_rows)
+
+    conv_few, conf_few = compute_inflation_convexity(
+        "FEWPTS", conn, params, "2024-12-31", "US", lookback_years=5
+    )
+
+    # Many data points (6 years → 5 diffs → higher confidence)
+    _insert_high_convexity_company(
+        conn, params, ticker="MANYPTS",
+        gm_series=[0.30, 0.33, 0.37, 0.42, 0.48, 0.55],
+        ppi_values=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    )
+
+    conv_many, conf_many = compute_inflation_convexity(
+        "MANYPTS", conn, params, "2024-12-31", "US", lookback_years=5
+    )
+
+    # Both should have positive convexity
+    assert conv_few > 0, f"Expected positive convexity for FEWPTS, got {conv_few}"
+    assert conv_many > 0, f"Expected positive convexity for MANYPTS, got {conv_many}"
+
+    # More data points → higher confidence
+    assert conf_many > conf_few, \
+        f"More data points should give higher confidence: {conf_many} vs {conf_few}"
+
+    # With convexity_min_points=4 in params, 2 data points / max(4, 5) = 0.4 confidence
+    # vs 5 data points / max(4, 5) = 1.0 confidence
+    assert conf_few < 1.0, f"Few points should have confidence < 1.0, got {conf_few}"
+
+
+# ---------------------------------------------------------------------------
+# Beta-adjusted WACC (Fix 2)
+# ---------------------------------------------------------------------------
+
+def _insert_prices(conn, ticker, n_days=400, start_price=100.0, vol=0.02):
+    """Insert synthetic prices into the DB for beta tests."""
+    import numpy as np
+    from datetime import date, timedelta
+    from src.data.db import upsert_prices
+
+    rng = np.random.default_rng(seed=hash(ticker) % (2**32))
+    dates = [date(2022, 1, 3) + timedelta(days=i) for i in range(n_days)]
+    prices = [start_price]
+    for _ in range(n_days - 1):
+        prices.append(prices[-1] * (1 + rng.normal(0.0003, vol)))
+
+    df = pd.DataFrame({
+        "ticker":    ticker,
+        "date":      dates,
+        "open":      [p * 0.99 for p in prices],
+        "high":      [p * 1.01 for p in prices],
+        "low":       [p * 0.98 for p in prices],
+        "close":     prices,
+        "adj_close": prices,
+        "volume":    [int(1e6)] * n_days,
+        "currency":  "USD",
+        "source":    "test",
+    })
+    upsert_prices(conn, df)
+
+
+def test_wacc_beta_adjusted_spread(conn, fundamentals_etn, params):
+    """Insert price data for ETN + SPY, verify spread differs from simple rf+erp."""
+    upsert_fundamentals_annual(conn, fundamentals_etn)
+    _insert_macro(conn, params)
+    _insert_prices(conn, "ETN", n_days=400, start_price=250.0)
+    _insert_prices(conn, "SPY", n_days=400, start_price=450.0, vol=0.01)
+
+    # Beta-adjusted WACC
+    spread_beta, conf_beta = compute_roic_wacc_spread("ETN", conn, params, AS_OF, "US")
+
+    # Simple WACC (beta disabled)
+    import copy
+    params_no_beta = copy.deepcopy(params)
+    params_no_beta["signals"]["quality"]["wacc_use_beta"] = False
+    spread_simple, conf_simple = compute_roic_wacc_spread("ETN", conn, params_no_beta, AS_OF, "US")
+
+    assert isinstance(spread_beta, float)
+    assert conf_beta > 0
+    # With beta and leverage, the WACC changes, so the spread should differ
+    assert spread_beta != pytest.approx(spread_simple, abs=1e-6), \
+        "Beta-adjusted spread should differ from simple rf+erp spread"
+
+
+def test_wacc_beta_disabled_matches_old_behavior(conn, fundamentals_etn, params):
+    """Set wacc_use_beta: False, verify spread matches old rf + erp calculation."""
+    import copy
+    params_disabled = copy.deepcopy(params)
+    params_disabled["signals"]["quality"]["wacc_use_beta"] = False
+
+    upsert_fundamentals_annual(conn, fundamentals_etn)
+    _insert_macro(conn, params_disabled)
+
+    spread, conf = compute_roic_wacc_spread("ETN", conn, params_disabled, AS_OF, "US")
+
+    # Manually compute: WACC = rf + erp (old behavior)
+    from src.data.macro import get_risk_free_rate
+    rf = get_risk_free_rate(conn, "US", AS_OF, params_disabled)
+    erp = params_disabled["return_estimation"]["equity_risk_premium"]
+    expected_wacc = rf + erp
+
+    # ROIC from synthetic data (nopat / invested_capital)
+    from src.data.db import get_latest_fundamentals
+    df = get_latest_fundamentals(conn, "ETN", n_years=1, as_of_date=AS_OF)
+    roic = df["roic"].dropna().iloc[0]
+    expected_spread = roic - expected_wacc
+
+    assert spread == pytest.approx(expected_spread, rel=1e-6)
+
+
+def test_wacc_beta_no_price_data_uses_default(conn, fundamentals_etn, params):
+    """No price data -> beta_valid=False -> confidence gets -0.15 penalty."""
+    upsert_fundamentals_annual(conn, fundamentals_etn)
+    _insert_macro(conn, params)
+    # Don't insert any prices — beta fallback to default
+
+    spread, conf = compute_roic_wacc_spread("ETN", conn, params, AS_OF, "US")
+    assert isinstance(spread, float)
+    # With source="test", base confidence = 1.0, penalty = -0.15 -> 0.85
+    assert conf == pytest.approx(0.85, abs=0.01), \
+        f"Expected confidence ~0.85 (1.0 - 0.15 penalty), got {conf}"
+
+
+def test_wacc_leveraged_vs_unleveraged(conn, params):
+    """Leveraged stock should have different WACC than unleveraged stock.
+    With debt, WACC blends cost of equity with after-tax cost of debt."""
+    _insert_macro(conn, params)
+
+    # Stock A: has debt (leveraged) — equity=3B, debt=1B
+    rows_a = []
+    for fy in [2023, 2024]:
+        rev, equity, debt = 5e9, 3e9, 1e9
+        cash, gw = 0.5e9, 0.5e9
+        ic = equity + debt - cash - gw
+        ebit = rev * 0.15
+        nopat = ebit * 0.79
+        rows_a.append({
+            "ticker": "LEVERED", "fiscal_year": fy,
+            "report_date": date(fy, 12, 31), "currency": "USD",
+            "accounting_std": "GAAP", "source": "test",
+            "revenue": rev, "gross_profit": rev * 0.40, "ebit": ebit,
+            "net_income": ebit * 0.75, "interest_expense": debt * 0.04,
+            "tax_expense": ebit * 0.21, "total_assets": equity + debt,
+            "total_equity": equity, "total_debt": debt, "cash": cash,
+            "goodwill": gw, "intangible_assets": 0.2e9,
+            "right_of_use_assets": None, "lease_liabilities": None,
+            "capex": rev * 0.04, "gross_margin": 0.40, "invested_capital": ic,
+            "nopat": nopat, "roic": nopat / ic, "effective_tax_rate": 0.21,
+        })
+
+    # Stock B: no debt (all-equity) — equity=4B, debt=0
+    rows_b = []
+    for fy in [2023, 2024]:
+        rev, equity, debt = 5e9, 4e9, 0.0
+        cash, gw = 0.5e9, 0.5e9
+        ic = equity - cash - gw
+        ebit = rev * 0.15
+        nopat = ebit * 0.79
+        rows_b.append({
+            "ticker": "UNLEVERED", "fiscal_year": fy,
+            "report_date": date(fy, 12, 31), "currency": "USD",
+            "accounting_std": "GAAP", "source": "test",
+            "revenue": rev, "gross_profit": rev * 0.40, "ebit": ebit,
+            "net_income": ebit * 0.75, "interest_expense": 0.0,
+            "tax_expense": ebit * 0.21, "total_assets": equity,
+            "total_equity": equity, "total_debt": debt, "cash": cash,
+            "goodwill": gw, "intangible_assets": 0.2e9,
+            "right_of_use_assets": None, "lease_liabilities": None,
+            "capex": rev * 0.04, "gross_margin": 0.40, "invested_capital": ic,
+            "nopat": nopat, "roic": nopat / ic, "effective_tax_rate": 0.21,
+        })
+
+    upsert_fundamentals_annual(conn, pd.DataFrame(rows_a))
+    upsert_fundamentals_annual(conn, pd.DataFrame(rows_b))
+
+    # No price data -> both use default beta=1.0, but leverage differs
+    spread_lev, conf_lev = compute_roic_wacc_spread("LEVERED", conn, params, AS_OF, "US")
+    spread_unlev, conf_unlev = compute_roic_wacc_spread("UNLEVERED", conn, params, AS_OF, "US")
+
+    # Both should be valid
+    import math
+    assert not math.isnan(spread_lev)
+    assert not math.isnan(spread_unlev)
+
+    # Leveraged stock should have different spread (lower WACC due to tax shield on debt)
+    assert spread_lev != pytest.approx(spread_unlev, abs=1e-6), \
+        f"Leveraged ({spread_lev}) and unleveraged ({spread_unlev}) should have different spreads"
+
+    # Leveraged WACC should be lower (after-tax cost of debt < cost of equity),
+    # so spread should be higher for leveraged stock
+    assert spread_lev > spread_unlev, \
+        f"Leveraged spread ({spread_lev}) should be > unleveraged ({spread_unlev}) due to tax shield"

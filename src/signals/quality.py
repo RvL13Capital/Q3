@@ -38,6 +38,69 @@ def _clamp_normalize(value: float, low: float, high: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Beta computation for CAPM-based WACC
+# ---------------------------------------------------------------------------
+
+def _compute_beta(
+    conn,
+    ticker: str,
+    market_index: str,
+    as_of_date: str,
+    min_obs: int = 120,
+) -> tuple[float, bool]:
+    """
+    Compute CAPM beta via OLS regression of stock log returns vs market index log returns.
+
+    Returns (beta, is_valid).
+    Falls back to (1.0, False) if insufficient observations.
+    """
+    from src.data.db import get_prices
+    from datetime import datetime, timedelta
+
+    # Compute start_date ~3 years before as_of_date
+    end_dt = datetime.strptime(as_of_date, "%Y-%m-%d").date() if isinstance(as_of_date, str) else as_of_date
+    start_dt = end_dt - timedelta(days=756)
+    start_str = start_dt.isoformat()
+    end_str = end_dt.isoformat()
+
+    # get_prices returns wide-format: index=date, columns=tickers
+    price_df = get_prices(conn, [ticker, market_index], start_str, end_str)
+    if price_df.empty or ticker not in price_df.columns or market_index not in price_df.columns:
+        return 1.0, False
+
+    # Drop rows where either is NaN
+    merged = price_df[[ticker, market_index]].dropna()
+    if len(merged) < min_obs:
+        return 1.0, False
+
+    merged = merged.sort_index()
+    stock_ret = np.log(merged[ticker] / merged[ticker].shift(1)).iloc[1:]
+    market_ret = np.log(merged[market_index] / merged[market_index].shift(1)).iloc[1:]
+
+    # Filter out any NaN/inf
+    mask = np.isfinite(stock_ret.values) & np.isfinite(market_ret.values)
+    if mask.sum() < min_obs:
+        return 1.0, False
+
+    sr = stock_ret.values[mask]
+    mr = market_ret.values[mask]
+
+    # OLS: beta = cov(rs, rm) / var(rm)
+    var_m = np.var(mr, ddof=1)
+    if var_m < 1e-12:
+        return 1.0, False
+
+    beta = float(np.cov(sr, mr, ddof=1)[0, 1] / var_m)
+
+    # Sanity bounds: beta outside [-1, 5] is likely data error
+    if beta < -1.0 or beta > 5.0:
+        logger.warning("Beta for %s = %.2f (out of bounds) — using default", ticker, beta)
+        return 1.0, False
+
+    return beta, True
+
+
+# ---------------------------------------------------------------------------
 # Sub-score 1: ROIC − WACC spread
 # ---------------------------------------------------------------------------
 
@@ -70,13 +133,51 @@ def compute_roic_wacc_spread(
     rf = rf_cache[region] if (rf_cache and region in rf_cache) else \
         get_risk_free_rate(conn, region, as_of_date, params)
     erp = params["return_estimation"]["equity_risk_premium"]
-    wacc = rf + erp  # simplified WACC (no beta, no leverage adjustment for MVP)
+
+    q_params = params.get("signals", {}).get("quality", {})
+    use_beta = q_params.get("wacc_use_beta", False)
+    beta_valid = True  # default: no penalty
+
+    if use_beta:
+        market_indices = params.get("market_indices", {})
+        market_index = market_indices.get(region, market_indices.get("US", "SPY"))
+        beta_default = float(q_params.get("wacc_beta_default", 1.0))
+        beta_min_obs = int(q_params.get("wacc_beta_min_obs", 120))
+
+        beta, beta_valid = _compute_beta(conn, ticker, market_index, as_of_date, beta_min_obs)
+        if not beta_valid:
+            beta = beta_default
+
+        cost_of_equity = rf + beta * erp
+
+        total_debt_val = 0.0
+        total_equity_val = 0.0
+        if "total_debt" in df.columns and not df["total_debt"].isna().all():
+            total_debt_val = float(df["total_debt"].dropna().iloc[0])
+        if "total_equity" in df.columns and not df["total_equity"].isna().all():
+            total_equity_val = float(df["total_equity"].dropna().iloc[0])
+
+        if total_equity_val > 0 and total_debt_val > 0:
+            total_capital = total_debt_val + total_equity_val
+            w_e = total_equity_val / total_capital
+            w_d = total_debt_val / total_capital
+            cost_of_debt = float(q_params.get("wacc_cost_of_debt", 0.05))
+            tax_shield = float(q_params.get("wacc_tax_shield", 0.21))
+            wacc = w_e * cost_of_equity + w_d * cost_of_debt * (1 - tax_shield)
+        else:
+            wacc = cost_of_equity
+    else:
+        wacc = rf + erp  # original simplified WACC
 
     spread = roic - wacc
 
     # Confidence: 1.0 for annual, 0.7 if only yfinance available
     source = df["source"].iloc[0] if not df.empty else "unknown"
     confidence = 0.7 if source == "yfinance" else 1.0
+
+    # Confidence penalty when using fallback beta
+    if use_beta and not beta_valid:
+        confidence = max(0.0, confidence - 0.15)
 
     return spread, confidence
 
@@ -196,7 +297,8 @@ def compute_inflation_convexity(
     if np.isnan(convexity):
         return float("nan"), 0.0
 
-    confidence = min(1.0, int(mask.sum()) / lookback_years)
+    min_points = params.get("signals", {}).get("quality", {}).get("convexity_min_points", lookback_years)
+    confidence = min(1.0, int(mask.sum()) / max(min_points, lookback_years))
     return convexity, confidence
 
 
@@ -252,6 +354,11 @@ def compute_quality_score(
         # Sub-component 3: exp(γ · max(0, slope)) — convexity amplifier
         safe_slope  = max(0.0, convexity) if not pd.isna(convexity) else 0.0
         conv_factor = math.exp(gamma * safe_slope)
+        # Confidence-based attenuation: noisy regression → less amplification
+        conv_factor = 1.0 + (conv_factor - 1.0) * conv_conf
+        # Hard cap from params (default: no cap for backward compat)
+        convexity_cap = float(q_params.get("convexity_cap", float("inf")))
+        conv_factor = min(conv_factor, convexity_cap)
 
         quality_score = min(1.0, spread_factor * snr_factor * conv_factor)
         quality_conf  = (roic_conf + margin_conf + conv_conf) / 3.0

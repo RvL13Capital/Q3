@@ -8,7 +8,8 @@ kelly:
   aum_eur: 50_000_000     # current AUM in EUR — set to actual fund size
   impact_scaling: 1.0     # universal impact constant c ≈ 1.0 (Bouchaud et al.)
   # Epistemic risk parameters (eq 12: λ · σ_epist · f  +  ½ · σ²_epist · f²)
-  # σ_epist proxy = 1 − composite_confidence  (Phase 3: replace with Deep Ensemble σ_epist)
+  # σ_epist = blend of data availability and model uncertainty (see sigma_epist_model_weight)
+  # Phase 3: replace with true Deep Ensemble σ_epist (eq 9)
   lambda_epist: 0.25        # λ: linear epistemic penalty coefficient (calibrated to 1−confidence proxy; replace with true scale when Deep Ensembles land)
   not_aus_confidence: 0.20  # composite_confidence < this → Not-Aus → f* = 0 instantly
   # Almgren-Chriss participation-rate penalty (endogenous slippage):
@@ -17,6 +18,18 @@ kelly:
   # the hard 10%/25% ADV boundaries.  0.0 = disabled (conservative default).
   eta_participation: 0.50   # η: participation impact coefficient (calibrate to fund's execution quality)
   adv_exit_threshold: 0.25  # exit trigger: position > 25% of ADV → "Roach Motel" risk
+  # Covariance matrix estimation (Ledoit-Wolf shrinkage)
+  use_shrunk_cov: true       # use Ledoit-Wolf shrunk covariance for sigma estimation
+  cov_window_days: 252       # observation window for covariance matrix (trading days)
+  cov_min_obs: 60            # minimum non-NaN observations required per asset
+  # Momentum overlay: symmetric μ boost/discount from swing_score (proto-μ_NN).
+  # μ_boosted = μ_base × (1 + β × (swing_score − 0.5) × 2 × swing_confidence)
+  # 0.0 = disabled (pure fundamental), 0.50 = ±50% of μ_base at full momentum.
+  # Bridge implementation — replaced by Deep Ensembles μ_NN in Phase 3.
+  momentum_boost_beta: 0.50
+  # Blended sigma_epist (Fix 5): combines data availability with model uncertainty
+  sigma_epist_model_weight: 0.50   # weight for model uncertainty component (0.0 → current behavior)
+  sigma_epist_vol_of_vol_window: 60  # short window for vol-of-vol comparison
 
 signals:
   # Composite formula is multiplicative: X_E × X_P × (1 - X_C)
@@ -52,6 +65,25 @@ signals:
     short_interest_window: 30    # days to average short_pct_float for current reading
     short_interest_high: 0.25    # pct_float threshold → score = 1.0 (fully crowded)
     short_interest_low: 0.05     # pct_float threshold → score = 0.0 (no signal)
+    # Enhanced short interest parameters (prime broker data)
+    cost_to_borrow_high: 0.10    # annualized CTB at which sub-score = 1.0
+    utilization_high: 0.80       # share utilization at which sub-score = 1.0
+    # Gamma exposure — dealer gamma hedging flow as crowding signal.
+    # Negative GEX = dealers short gamma = destabilizing forced flows = high crowding risk.
+    csd_omega_gamma: 0.10        # weight for dealer gamma exposure sub-score
+    gamma_lookback_days: 5       # days to average net GEX
+    gamma_threshold_low: -0.5    # normalized GEX below this → score = 1.0 (max crowding)
+    gamma_threshold_high: 0.5    # normalized GEX above this → score = 0.0 (no signal)
+    # IV Skew — OTM put premium over ATM call as crowding signal.
+    csd_omega_iv_skew: 0.10      # weight for IV skew sub-score
+    skew_threshold_low: 1.0      # skew below this → score = 0 (normal)
+    skew_threshold_high: 1.4     # skew above this → score = 1 (max crowding)
+    # Put/Call Ratio — OI-weighted put/call as bearish crowding signal.
+    csd_omega_put_call: 0.10     # weight for put/call ratio sub-score
+    pc_threshold_low: 0.5        # ratio below this → score = 0
+    pc_threshold_high: 1.5       # ratio above this → score = 1
+    min_components_full_confidence: 4  # need ≥4 active components for full confidence
+    coverage_penalty_floor: 0.40       # minimum coverage factor (don't fully zero out)
 
   quality:
     roic_wacc_spread_min: 0.0    # hard gate: ROIC ≤ WACC → X_P = 0
@@ -63,8 +95,15 @@ signals:
     # gamma: steepness of the exp(γ·max(0, slope)) convexity multiplier (eq 5)
     # gamma=2 → slope=0.5 → exp(1.0)=2.72× amplification for strong pricing power
     gamma: 2.0
+    convexity_cap: 1.50              # hard ceiling on exp(γ·slope) convexity multiplier
+    convexity_min_points: 4          # regression points for full confidence (denominator)
     convexity_max: +0.50         # slope beyond this is treated as fully anti-fragile
     lookback_years: 5
+    wacc_use_beta: true              # enable beta-adjusted WACC (false → current rf+erp behavior)
+    wacc_beta_default: 1.0           # fallback beta when insufficient price history
+    wacc_beta_min_obs: 120           # minimum trading days for reliable beta regression
+    wacc_cost_of_debt: 0.05          # assumed pre-tax cost of debt (5%)
+    wacc_tax_shield: 0.21            # corporate tax rate for interest deductibility
 
 physical:
   # EROEI logistic damper (eq 4): X_E = 1 / (1 + exp(κ · (ECS_proxy − ECS_crit)))
@@ -81,6 +120,14 @@ return_estimation:
   # μ_base = rf + θ × composite  (eq 7: rf + θ·X_P × X_E × (1-X_C))
   # composite ∈ [0,1]; θ calibrated so composite=0.50 → ~15% above rf
   theta_risk_premium: 0.30
+
+data_maturity:
+  enabled: true                    # enable Data Maturity Score (false → current behavior)
+  min_price_days: 252              # 1 year of trading days for full maturity
+  min_fundamental_years: 3         # 3 fiscal years of fundamentals for full maturity
+  min_margin_years: 3              # 3 fiscal years of margin data for full maturity
+  penalty_floor: 0.30              # DMS never goes below this (even for fresh IPOs)
+  composite_confidence_blend: 0.30 # weight of DMS in composite confidence blend
 
 data:
   price_staleness_days: 1

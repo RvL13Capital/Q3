@@ -100,7 +100,8 @@ def estimate_daily_dollar_volume(
             WHERE ticker = ? AND date >= ? AND date <= ?
             ORDER BY date
         """, [ticker, start, as_of_date]).df()
-    except Exception:
+    except Exception as e:
+        logger.warning("Volume query failed for %s: %s", ticker, e)
         return 0.0
 
     if df.empty or df["volume"].isna().all():
@@ -112,6 +113,38 @@ def estimate_daily_dollar_volume(
 
     daily_vol = (df["adj_close"] * df["volume"]).mean()
     return float(daily_vol) if daily_vol > 0 else 0.0
+
+
+def batch_estimate_daily_dollar_volume(
+    tickers: list[str],
+    conn,
+    as_of_date: str,
+    window_days: int = 60,
+) -> dict[str, float]:
+    """Batch estimate average daily dollar volume for multiple tickers."""
+    if not tickers:
+        return {}
+    start = (datetime.strptime(as_of_date, "%Y-%m-%d")
+             - timedelta(days=window_days + 10)).strftime("%Y-%m-%d")
+    try:
+        placeholders = ", ".join(["?"] * len(tickers))
+        df = conn.execute(f"""
+            SELECT ticker, AVG(adj_close * volume) as avg_daily_vol
+            FROM prices
+            WHERE ticker IN ({placeholders})
+              AND date >= ? AND date <= ?
+              AND adj_close IS NOT NULL AND volume IS NOT NULL
+            GROUP BY ticker
+        """, tickers + [start, as_of_date]).df()
+        if df.empty:
+            return {}
+        return {
+            row["ticker"]: max(0.0, float(row["avg_daily_vol"])) if pd.notna(row["avg_daily_vol"]) else 0.0
+            for _, row in df.iterrows()
+        }
+    except Exception as e:
+        logger.warning("Batch daily volume estimation failed: %s", e)
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -130,9 +163,36 @@ def get_last_kelly_fraction(conn, ticker: str) -> float:
         """, [ticker]).fetchone()
         if result and result[0] is not None:
             return float(result[0])
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Kelly fraction lookup failed for %s: %s", ticker, e)
     return 0.0
+
+
+def batch_get_last_kelly_fractions(conn, tickers: list[str]) -> dict[str, float]:
+    """Batch fetch kelly_25pct from the most recent snapshot for each ticker."""
+    if not tickers:
+        return {}
+    try:
+        placeholders = ", ".join(["?"] * len(tickers))
+        df = conn.execute(f"""
+            SELECT ticker, kelly_25pct
+            FROM portfolio_snapshots
+            WHERE (ticker, snapshot_date) IN (
+                SELECT ticker, MAX(snapshot_date)
+                FROM portfolio_snapshots
+                WHERE ticker IN ({placeholders})
+                GROUP BY ticker
+            )
+        """, tickers).df()
+        if df.empty:
+            return {}
+        return {
+            row["ticker"]: float(row["kelly_25pct"]) if pd.notna(row["kelly_25pct"]) else 0.0
+            for _, row in df.iterrows()
+        }
+    except Exception as e:
+        logger.warning("Batch kelly fraction lookup failed: %s", e)
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +212,9 @@ def kelly_fraction(
     lambda_epist: float = 0.25,
     not_aus_threshold: float = 0.0,
     eta_participation: float = 0.0,
+    swing_score: Optional[float] = None,
+    swing_confidence: Optional[float] = None,
+    momentum_boost_beta: float = 0.0,
 ) -> tuple[float, float]:
     """
     Optimise the eq 12 Kelly objective with epistemic penalty and market impact.
@@ -169,6 +232,12 @@ def kelly_fraction(
                          effective return for illiquid names, causing the
                          optimizer to organically curve away from positions that
                          consume a large share of daily volume.
+    swing_score        : momentum swing score [0, 1] from momentum.py.
+                         None = no momentum data → no boost (pure fundamental).
+    swing_confidence   : data quality [0, 1]. Gates the boost strength.
+    momentum_boost_beta: max fractional boost/discount of μ. Default 0.0 (disabled).
+                         0.50 means momentum can scale μ by ±50%.
+                         Proto-μ_NN — replaced by Deep Ensembles in Phase 3.
 
     Returns (f_adjusted, f_full) where:
       f_full     = unconstrained optimiser solution (full Kelly, pre-fraction)
@@ -183,6 +252,21 @@ def kelly_fraction(
 
     if sigma <= 0 or mu <= rf:
         return 0.0, 0.0
+
+    # ── Momentum boost (proto-μ_NN): symmetric swing_score overlay ──────────
+    # μ_boosted = μ × (1 + β × (swing − 0.5) × 2 × confidence)
+    # Centered at swing=0.5 (neutral); positive momentum boosts μ, negative discounts.
+    # Bridge implementation — replaced by Deep Ensembles μ_NN in Phase 3.
+    if (swing_score is not None
+            and swing_confidence is not None
+            and momentum_boost_beta > 0):
+        # Defensive clamps — upstream momentum.py normalises to [0,1] but the
+        # Kelly optimizer is the last line of defence before real capital.
+        swing_score = max(0.0, min(1.0, swing_score))
+        swing_confidence = max(0.0, min(1.0, swing_confidence))
+        momentum_boost_beta = min(1.0, momentum_boost_beta)  # β>1 could negate μ
+        m_centered = (swing_score - 0.5) * 2.0  # ∈ [-1, +1]
+        mu = mu * (1.0 + momentum_boost_beta * m_centered * swing_confidence)
 
     # ── Total variance (aleatoric + epistemic) ───────────────────────────────
     sigma_sq_total = sigma ** 2 + sigma_epist ** 2
@@ -305,6 +389,12 @@ def compute_kelly_weights(
     from src.data.macro import get_risk_free_rate
 
     universe_map = universe_df.set_index("ticker")[["region", "primary_bucket"]]
+    required = {"ticker", "entry_signal", "composite_score"}
+    missing = required - set(scored_df.columns)
+    if missing:
+        logger.error("compute_kelly_weights: missing columns %s", missing)
+        return pd.DataFrame()
+
     candidates   = scored_df[scored_df["entry_signal"] == True].copy()
 
     if candidates.empty:
@@ -316,14 +406,38 @@ def compute_kelly_weights(
     impact_scaling     = float(kelly_params.get("impact_scaling", 1.0))
     lambda_epist       = float(kelly_params.get("lambda_epist", 0.25))
     eta_participation  = float(kelly_params.get("eta_participation", 0.0))
+    momentum_boost_beta = float(kelly_params.get("momentum_boost_beta", 0.0))
     # Not-Aus fires when composite_confidence < not_aus_confidence.
     # Mapped: not_aus_threshold = 1 − not_aus_confidence (in σ_epist proxy space).
     not_aus_conf      = float(kelly_params.get("not_aus_confidence", 0.20))
     not_aus_threshold = max(0.0, 1.0 - not_aus_conf)
 
+    # ── Covariance matrix estimation (Ledoit-Wolf shrinkage) ──────────────
+    use_shrunk_cov = kelly_params.get("use_shrunk_cov", True)
+    cov_matrix     = None
+    shrinkage_delta = 0.0
+
+    if use_shrunk_cov:
+        from src.portfolio.covariance import estimate_covariance_matrix
+        cov_window = int(kelly_params.get("cov_window_days", 252))
+        cov_min    = int(kelly_params.get("cov_min_obs", 60))
+        cov_tickers = candidates["ticker"].tolist()
+        cov_matrix, shrinkage_delta, cov_valid = estimate_covariance_matrix(
+            cov_tickers, conn, as_of_date,
+            window_days=cov_window, min_obs=cov_min,
+        )
+        if not cov_valid:
+            logger.warning("Covariance matrix estimation failed — falling back to per-asset sigma")
+            cov_matrix = None
+
     # Pre-fetch rf rates once per region.
     regions  = universe_df["region"].unique().tolist()
     rf_cache = {r: get_risk_free_rate(conn, r, as_of_date, params) for r in regions}
+
+    # Batch-fetch f_old and daily dollar volume (replaces per-stock DB queries)
+    candidate_tickers = candidates["ticker"].tolist()
+    f_old_cache = batch_get_last_kelly_fractions(conn, candidate_tickers)
+    daily_vol_cache = batch_estimate_daily_dollar_volume(candidate_tickers, conn, as_of_date)
 
     rows = []
     for _, row in candidates.iterrows():
@@ -337,17 +451,66 @@ def compute_kelly_weights(
         if mu is None or pd.isna(mu):
             continue
 
-        sigma, sigma_valid = estimate_sigma(ticker, conn, as_of_date)
-        f_old              = get_last_kelly_fraction(conn, ticker)
-        daily_vol          = estimate_daily_dollar_volume(ticker, conn, as_of_date)
+        # Use shrunk covariance diagonal when available, else per-asset estimate
+        if cov_matrix is not None and ticker in cov_matrix.index:
+            sigma = float(np.sqrt(cov_matrix.loc[ticker, ticker]))
+            sigma = max(0.05, sigma)  # preserve sigma floor
+            sigma_valid = True
+        else:
+            sigma, sigma_valid = estimate_sigma(ticker, conn, as_of_date)
+        f_old     = f_old_cache.get(ticker, 0.0)
+        daily_vol = daily_vol_cache.get(ticker, 0.0)
 
-        # σ_epist proxy: low confidence → high epistemic uncertainty.
-        # composite_confidence ∈ [0.40, 1.0] after the confidence gate in composite.py.
-        # proxy ∈ [0.0, 0.60]; proxy = 0 means full confidence, proxy → 1 triggers Not-Aus.
+        # ── Blended σ_epist (Fix 5) ──────────────────────────────────────
+        # Three sources of epistemic uncertainty:
+        # 1. Data component (current): how much data do we have?
+        # 2. Signal dispersion: do physical/quality/crowding agree?
+        # 3. Vol-of-vol: is our volatility estimate stable?
         comp_conf = row.get("composite_confidence", 1.0)
         if pd.isna(comp_conf) or comp_conf <= 0:
             comp_conf = 1.0
-        sigma_epist_proxy = max(0.0, 1.0 - comp_conf)
+        sigma_data = max(0.0, 1.0 - comp_conf)
+
+        model_weight = float(kelly_params.get("sigma_epist_model_weight", 0.0))
+
+        if model_weight > 0:
+            # Signal dispersion: CV of the three signal confidences
+            p_conf = row.get("physical_confidence", 0.5)
+            q_conf = row.get("quality_confidence", 0.5)
+            c_conf = row.get("crowding_confidence", 0.5)
+            confs = [
+                p_conf if not pd.isna(p_conf) else 0.5,
+                q_conf if not pd.isna(q_conf) else 0.5,
+                c_conf if not pd.isna(c_conf) else 0.5,
+            ]
+            conf_mean = np.mean(confs)
+            conf_std = np.std(confs)
+            cv = min(1.0, conf_std / max(0.01, conf_mean))
+
+            # Vol-of-vol: mismatch between short-term and long-term sigma
+            vol_of_vol_window = int(kelly_params.get("sigma_epist_vol_of_vol_window", 60))
+            sigma_short, _ = estimate_sigma(ticker, conn, as_of_date, window_days=vol_of_vol_window)
+            # sigma (the 252-day one) is already computed above
+            if sigma > 0.01:
+                vol_ratio = min(1.0, abs(sigma_short - sigma) / sigma)
+            else:
+                vol_ratio = 0.0
+
+            # Model uncertainty: max of dispersion and vol instability
+            model_uncertainty = max(cv, vol_ratio)
+
+            # Blend
+            sigma_epist_proxy = model_weight * model_uncertainty + (1.0 - model_weight) * sigma_data
+        else:
+            sigma_epist_proxy = sigma_data
+
+        # Momentum boost data (from composite.py via scored_df)
+        swing_score = row.get("swing_score")
+        swing_conf  = row.get("swing_confidence")
+        if pd.isna(swing_score) if swing_score is not None else True:
+            swing_score = None
+        if pd.isna(swing_conf) if swing_conf is not None else True:
+            swing_conf = None
 
         # Explicit Not-Aus check for logging (kelly_fraction enforces it internally too)
         not_aus_fired = not_aus_threshold > 0 and sigma_epist_proxy >= not_aus_threshold
@@ -366,6 +529,9 @@ def compute_kelly_weights(
             lambda_epist=lambda_epist,
             not_aus_threshold=not_aus_threshold,
             eta_participation=eta_participation,
+            swing_score=swing_score,
+            swing_confidence=swing_conf,
+            momentum_boost_beta=momentum_boost_beta,
         )
         # f_adjusted already incorporates σ_epist via the objective (eq 12)
 
