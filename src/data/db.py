@@ -690,6 +690,68 @@ def get_position_entry_date(conn: duckdb.DuckDBPyConnection, ticker: str) -> Opt
     return result[0] if result else None
 
 
+def get_position_performance(
+    conn: duckdb.DuckDBPyConnection,
+    portfolio: pd.DataFrame,
+    as_of_date: str,
+) -> pd.DataFrame:
+    """
+    Compute unrealised performance for each position in the portfolio.
+
+    Returns DataFrame with columns:
+        ticker, entry_date, holding_days, entry_price, current_price,
+        return_pct, weight, pnl_contrib
+    """
+    if portfolio.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for _, pos in portfolio.iterrows():
+        ticker = pos["ticker"]
+        weight = pos.get("weight", 0.0)
+
+        entry_date_val = get_position_entry_date(conn, ticker)
+        if entry_date_val is None:
+            continue
+
+        entry_str = (entry_date_val.isoformat()
+                     if hasattr(entry_date_val, "isoformat") else str(entry_date_val))
+        prices_df = get_prices(conn, [ticker], entry_str, as_of_date)
+        if prices_df.empty or ticker not in prices_df.columns:
+            continue
+
+        series = prices_df[ticker].dropna()
+        if len(series) < 1:
+            continue
+
+        entry_price = float(series.iloc[0])
+        current_price = float(series.iloc[-1])
+        if entry_price <= 0:
+            continue
+
+        ret = (current_price - entry_price) / entry_price
+        as_of = date.fromisoformat(as_of_date) if isinstance(as_of_date, str) else as_of_date
+        entry_d = entry_date_val if isinstance(entry_date_val, date) else date.fromisoformat(str(entry_date_val))
+        holding_days = (as_of - entry_d).days
+
+        rows.append({
+            "ticker": ticker,
+            "entry_date": entry_str,
+            "holding_days": holding_days,
+            "entry_price": round(entry_price, 2),
+            "current_price": round(current_price, 2),
+            "return_pct": round(ret, 4),
+            "weight": round(weight, 4),
+            "pnl_contrib": round(ret * weight, 4),
+        })
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows).sort_values("return_pct", ascending=False).reset_index(drop=True)
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Staleness check
 # ---------------------------------------------------------------------------

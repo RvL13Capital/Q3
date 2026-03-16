@@ -94,7 +94,7 @@ def generate_weekly_report(
     Generate Markdown weekly report.
     Returns path to the created file.
     """
-    from src.data.db import get_latest_portfolio
+    from src.data.db import get_latest_portfolio, get_position_performance
     from src.data.macro import get_risk_free_rate
 
     output_path = Path(output_dir)
@@ -207,6 +207,34 @@ def generate_weekly_report(
                 f"| {_traffic_light(crowd, params)} |"
             )
         lines += ["", f"*Cash reserve: {_fmt_pct(cash_w)}*", ""]
+
+    # ── 3b. Position Performance ───────────────────────────────────────────────
+    if not portfolio.empty:
+        try:
+            perf_df = get_position_performance(conn, portfolio, as_of_date)
+        except Exception:
+            perf_df = pd.DataFrame()
+        if not perf_df.empty:
+            total_contrib = perf_df["pnl_contrib"].sum()
+            lines += ["## Position Performance", ""]
+            lines += [
+                f"*Unrealised P&L contribution (weighted): **{_fmt_ret(total_contrib)}***",
+                "",
+                "| Ticker | Entry Date | Days | Entry Price | Current Price | Return | Weight | P&L Contrib |",
+                "|--------|-----------|------|-------------|---------------|--------|--------|-------------|",
+            ]
+            for _, r in perf_df.iterrows():
+                lines.append(
+                    f"| {r['ticker']} "
+                    f"| {r['entry_date']} "
+                    f"| {r['holding_days']} "
+                    f"| {r['entry_price']:.2f} "
+                    f"| {r['current_price']:.2f} "
+                    f"| {_fmt_ret(r['return_pct'])} "
+                    f"| {_fmt_pct(r['weight'])} "
+                    f"| {_fmt_ret(r['pnl_contrib'])} |"
+                )
+            lines.append("")
 
     # ── 4. Watch List ─────────────────────────────────────────────────────────
     if not watch_list.empty:
