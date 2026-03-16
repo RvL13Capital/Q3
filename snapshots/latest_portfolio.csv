@@ -1,5 +1,5 @@
 snapshot_date,ticker,weight,composite_score,kelly_25pct,bucket_id,is_new_position,rationale
-2026-03-13,LDO.MI,0.08,0.6947,0.0864,defense,True,
-2026-03-13,ASM.AS,0.0464,0.5441,0.0464,ai_infra,True,
-2026-03-13,ESLT,0.0273,0.3771,0.0273,defense,True,
-2026-03-13,VRT,0.0373,0.6215,0.0373,ai_infra,True,
+2026-03-16,VRT,0.0256,0.589,0.0256,ai_infra,True,
+2026-03-16,SAAB-B.ST,0.021,0.3618,0.021,defense,True,
+2026-03-16,ESLT,0.042,0.5467,0.042,defense,True,
+2026-03-16,LDO.MI,0.0611,0.6781,0.0611,defense,True,
