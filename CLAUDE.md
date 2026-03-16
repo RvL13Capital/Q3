@@ -239,7 +239,7 @@ Eq 12 — Robust Kelly — Complete Objective:
 
 **Currently implemented terms:**
 - `(μ_base) · f` — μ_NN = 0 pending Module III
-- `− λ · σ_epist · f` — linear epistemic penalty (σ_epist proxy = 1 − composite_confidence)
+- `− λ · σ_epist · f` — linear epistemic penalty (σ_epist = blended data+model uncertainty)
 - `− ½ · (σ²_alea + σ²_epist) · f²` — total variance with epistemic component
 - `− c · σ_alea · |f − f_old|^1.5 · √(W/V)` — turnover market impact (Bouchaud square-root law)
 - `− η · σ · √(f·fraction·AUM/ADV) · f` — **Almgren-Chriss participation-rate penalty** (endogenous slippage)
@@ -255,8 +255,12 @@ participation rate `f·AUM/ADV`, organically curving allocations away from illiq
 *before* hitting the hard 10% ADV warning or 25% ADV exit trigger. The penalty is factored
 as `η · σ · √(fraction · AUM / ADV) · √f · f` for computational efficiency.
 
-**Not yet implemented:** True σ_epist from Deep Ensembles (Module III); current proxy is
-1 − composite_confidence.
+**σ_epist estimation (Fix 5 — blended):** σ_epist is a blend of data availability
+(`1 − composite_confidence`) and model uncertainty (`max(signal_dispersion, vol_of_vol)`),
+weighted by `sigma_epist_model_weight` (default 0.50). Signal dispersion = CV of
+physical/quality/crowding confidences. Vol-of-vol = |σ_60d − σ_252d| / σ_252d.
+Setting `sigma_epist_model_weight: 0.0` reverts to the old data-only proxy.
+True σ_epist from Deep Ensembles (Module III) pending.
 
 #### Four Emergent System Properties
 
@@ -312,7 +316,7 @@ The algorithm and the portfolio manager are partners, not competitors.
 | II — Deterministischer Anker | X_E, X_P, X_C, μ_base (eq 4–7) | **Complete** |
 | III — Hybrider Motor | UDE, Deep Ensembles, μ_NN, σ²_epist (eq 8–9) | **Deferred** — composite_confidence proxy only |
 | IV — Kontrafaktisches Labor | PI-SBDM, Lévy, minimax λ* (eq 10) | **Deferred** |
-| V — Hard-Capacity Kelly | Full eq 12 with all terms, Not-Aus | **Partial** — μ_NN=0, σ_epist proxy via composite_confidence, Almgren-Chriss participation penalty, w_max enforced, ADV exit trigger, Not-Aus wired via σ_epist proxy |
+| V — Hard-Capacity Kelly | Full eq 12 with all terms, Not-Aus | **Partial** — μ_NN=0 replaced by proto-μ_NN (momentum boost β=0.50), **blended σ_epist** (data+model uncertainty), Almgren-Chriss, w_max, ADV exit, Not-Aus, **Ledoit-Wolf covariance shrinkage** for σ estimation |
 
 ---
 
@@ -360,12 +364,23 @@ Crowding is inverted by `composite.py`: the formula uses `(1 − X_C)`.
 ## Key Invariants
 
 - **Multiplicative composite** — X_E × X_P × (1−X_C). All three tensors must be simultaneously favourable. Any zero → composite = 0 → no trade.
-- **Hard gate** — ROIC ≤ WACC → X_P = 0. No moat if capital costs not covered.
+- **Hard gate** — ROIC ≤ WACC → X_P = 0. No moat if capital costs not covered. WACC = CAPM cost of equity (rf + β·ERP) blended with after-tax cost of debt using D/E weights when `wacc_use_beta: true` (default). Falls back to `rf + erp` when beta unavailable or disabled.
 - **Confidence gate** — `composite_confidence < 0.40` → NaN → excluded. Never overridden.
 - **Crowding inversion** — high X_C is bad; composite uses `(1 − X_C)`.
 - **tanh Fail-Safe** (spec principle, pending Module III) — AI correction bounded to (−1, +1), μ_base always dominant.
 - **Google Trends (X_C third component)** — only applied when data present in DB. Falls back to two-component formula silently.
-- **σ_epist Not-Aus** — σ_epist ≥ not_aus_threshold → f* = 0 (wired via composite_confidence proxy; true Deep Ensemble σ_epist pending Module III).
+- **Gamma exposure (X_C sixth component)** — dealer net GEX; negative = destabilizing forced flows. Optional, auto-renormalised.
+- **IV skew crowding (X_C seventh component)** — OTM put IV / ATM call IV ratio. High skew (>1.4) = max crowding, normal (≤1.0) = 0. Auto-renormalised weight `csd_omega_iv_skew`.
+- **Put/call crowding (X_C eighth component)** — OI-weighted put/call ratio. High ratio (>1.5) = max crowding. Auto-renormalised weight `csd_omega_put_call`.
+- **IV percentile** — current ATM IV vs 252-day range. < 0.20 = cheap vol, > 0.80 = expensive vol. Stored in `options_iv_history` table.
+- **Options data waterfall** — yfinance → Alpaca → freeoptionschain. US tickers only. EU/CA tickers gracefully degrade (crowding auto-renormalises remaining components).
+- **Black-Scholes pricing** — `src/pricing/black_scholes.py`: bs_price, bs_greeks (Δ,Γ,Θ,Ν,ρ), implied_vol (Newton-Raphson), detect_mispricing. Pure math with scipy fallback.
+- **Enhanced short interest** — blends pct_float (0.5), cost-to-borrow (0.3), and utilization (0.2) when prime broker data available. Falls back to pct_float-only seamlessly.
+- **Ledoit-Wolf covariance** — `use_shrunk_cov: true` in params.yaml. Falls back to per-asset sigma if matrix estimation fails. Shrinkage intensity δ is logged as a diagnostic.
+- **Convexity cap** — `exp(γ·slope)` inflation convexity multiplier is attenuated by regression confidence (`1 + (factor-1)×conf`), then hard-capped at `convexity_cap` (default 1.50). Prevents noisy 3-point OLS regressions from dominating the quality score.
+- **Crowding coverage penalty** — Crowding confidence is penalized when fewer than `min_components_full_confidence` (default 4) sub-components are active: `conf *= max(floor, n/min)`. EU stocks with 2 components get halved confidence; US stocks with 6+ are unaffected. Score is unchanged — only confidence.
+- **Data Maturity Score (DMS)** — Geometric mean of three maturity dimensions (price days, fundamental years, margin years), each normalized to [0,1], floored at `penalty_floor` (0.30). Blended into composite_confidence at weight `composite_confidence_blend` (0.30). IPOs with no fundamentals get DMS=0.30 → lower confidence → higher σ_epist → smaller Kelly allocation. No separate IPO formula needed.
+- **σ_epist Not-Aus** — σ_epist ≥ not_aus_threshold → f* = 0. σ_epist is now a blend of data availability and model uncertainty (signal dispersion + vol-of-vol). True Deep Ensemble σ_epist pending Module III.
 - **Almgren-Chriss participation penalty** — η·σ·√(f·fraction·AUM/ADV) penalises steady-state illiquidity endogenously before hard ADV limits fire.
 - **ADV exit trigger** — position consuming > `adv_exit_threshold` (25%) of daily volume triggers automatic exit (Trigger 6 in monitor.py).
 - **Bitemporal t_k filtering** — fundamentals and macro queries filter by `t_k <= as_of_date` when `as_of_date` is provided, preventing look-ahead bias from unreleased filings and revised macro data.
@@ -380,17 +395,31 @@ Crowding is inverted by `composite.py`: the formula uses `(1 − X_C)`.
 | 2 | Continuous Nowcasting SDE (CD-NKBF) | I | — | Deferred |
 | 3 | Discrete Kalman Update | I | — | Deferred |
 | 4 | X_E EROEI logistic damper | II | `signals/physical.py` | Implemented (PPIENG proxy) |
-| 5 | X_P quality/moat (ROIC−WACC × SNR × convexity) | II | `signals/quality.py` | Implemented |
-| 6 | X_C CSD (autocorr + absorption ratio [+ trends]) | II | `signals/crowding.py` | Implemented |
+| 5 | X_P quality/moat (ROIC−WACC × SNR × convexity) | II | `signals/quality.py` | Implemented (beta-adjusted WACC, convexity cap) |
+| 6 | X_C CSD (autocorr + absorption + trends + ETF corr + SI + gamma + IV skew + P/C) | II | `signals/crowding.py` | Implemented (8 sub-components) |
 | 7 | μ_base Basis-Drift Synthese | II | `signals/composite.py` | Implemented |
 | 8 | UDE: dS_t = [μ_base + tanh(ω)·N_θ] dt + σ_alea dW_t | III | — | Deferred |
 | 9 | Deep Ensemble variance decomposition (σ²_epist, σ²_alea) | III | — | Deferred (proxy) |
 | 10 | Minimax calibration λ* (10,000 OOD scenarios) | IV | — | Deferred |
 | 11 | Square-Root Market Impact Law | V | `portfolio/kelly.py` | Implemented |
-| 12 | Robust Kelly full objective | V | `portfolio/kelly.py` | Partial (μ_NN=0, σ_epist proxy, Almgren-Chriss participation penalty implemented) |
+| 12 | Robust Kelly full objective | V | `portfolio/kelly.py` | Partial (μ_NN=0, blended σ_epist, Almgren-Chriss participation penalty implemented) |
 | — | Almgren-Chriss participation penalty | V | `portfolio/kelly.py` | Implemented (η·σ·√(f·fraction·AUM/ADV)) |
 | — | ADV exit trigger (Trigger 6) | V | `portfolio/monitor.py` | Implemented (adv_exit_threshold) |
-| — | Bitemporal t_k schema | I | `data/db.py` | Implemented (query filtering, backfill) |
+| — | Bitemporal t_k schema | I | `data/db.py` | Implemented (Phase 2.5: t_k in PKs, ghost states, ROW_NUMBER dedup, ON CONFLICT DO UPDATE, auto-migration) |
+| — | Ledoit-Wolf covariance shrinkage | V | `portfolio/covariance.py` | Implemented (pure numpy, δ·μ·I + (1−δ)·S) |
+| — | Dealer gamma exposure (GEX) | II | `signals/crowding.py` | Implemented (6th CSD sub-component) |
+| — | Enhanced short interest (CTB + util) | II | `signals/crowding.py` | Implemented (blended: 0.5×pct + 0.3×ctb + 0.2×util) |
+| — | Symmetric momentum boost (proto-μ_NN) | V (bridge→III) | `portfolio/kelly.py` | Implemented (β·(swing−0.5)·2·conf scales μ_base ±50%) |
+| — | IV skew crowding | II | `signals/crowding.py` | Implemented (7th CSD sub-component, OTM put IV / ATM call IV) |
+| — | Put/call ratio crowding | II | `signals/crowding.py` | Implemented (8th CSD sub-component, OI-weighted P/C ratio) |
+| — | Black-Scholes pricing | — | `pricing/black_scholes.py` | Implemented (Greeks, IV solver, mispricing detection) |
+| — | Live options chain fetching | I | `data/options.py` | Implemented (yfinance → Alpaca → freeoptionschain waterfall) |
+| — | IV percentile tracking | I | `data/db.py` | Implemented (options_iv_history table, 252-day percentile) |
+| — | Convexity cap + confidence attenuation | II | `signals/quality.py` | Implemented (cap=1.50, attenuated by conv_conf) |
+| — | Beta-adjusted WACC with leverage | II | `signals/quality.py` | Implemented (CAPM CoE + D/E-weighted CoD, fallback to rf+erp) |
+| — | Crowding coverage confidence penalty | II | `signals/crowding.py` | Implemented (min 4 components for full conf) |
+| — | Data Maturity Score (DMS) | II→V | `signals/composite.py` | Implemented (geomean of price/fund/margin maturity, blended into comp_conf) |
+| — | Blended σ_epist (data + model uncertainty) | V | `portfolio/kelly.py` | Implemented (w×max(CV, vol_ratio) + (1-w)×(1-conf)) |
 
 ---
 
