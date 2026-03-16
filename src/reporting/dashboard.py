@@ -14,7 +14,7 @@ import yaml
 import pandas as pd
 import streamlit as st
 
-from src.data.db       import get_connection, get_latest_portfolio, get_latest_signal_scores
+from src.data.db       import get_connection, get_latest_portfolio, get_latest_signal_scores, get_position_performance
 from src.data.universe import load_universe
 
 DB_PATH       = Path(__file__).parent.parent.parent / "data" / "q3.duckdb"
@@ -541,6 +541,17 @@ def run_dashboard():
     if section == "⬡  OVERVIEW":
         st.markdown(_section_header("PORTFOLIO OVERVIEW", f"{n_pos} positions · {invested:.1%} deployed"), unsafe_allow_html=True)
 
+        # ── Position Performance ──────────────────────────────────────
+        perf_df = pd.DataFrame()
+        if not portfolio.empty and not is_mock and DB_PATH.exists():
+            try:
+                conn = get_conn()
+                import datetime as _dt
+                _today = _dt.date.today().isoformat()
+                perf_df = get_position_performance(conn, portfolio, _today)
+            except Exception:
+                perf_df = pd.DataFrame()
+
         col_left, col_right = st.columns([3, 2])
 
         with col_left:
@@ -574,6 +585,40 @@ def run_dashboard():
                                 'color:#4a8aac;letter-spacing:0.2em;margin:10px 0 4px">BUCKET SCORES</div>',
                                 unsafe_allow_html=True)
                     st.dataframe(bkt_stats, width="stretch", hide_index=True)
+
+        # ── Position Performance table ────────────────────────────────
+        if not perf_df.empty:
+            st.markdown("---")
+            total_contrib = perf_df["pnl_contrib"].sum()
+            perf_accent = "#00ff88" if total_contrib >= 0 else "#ff3060"
+            st.markdown(
+                _section_header(
+                    "POSITION PERFORMANCE",
+                    f"unrealised weighted P&L: {total_contrib:+.2%}",
+                ),
+                unsafe_allow_html=True,
+            )
+
+            pc1, pc2, pc3, pc4 = st.columns(4)
+            n_win = int((perf_df["return_pct"] > 0).sum())
+            n_lose = int((perf_df["return_pct"] < 0).sum())
+            best = perf_df.iloc[0]
+            worst = perf_df.iloc[-1]
+            pc1.markdown(_stat_card("WEIGHTED P&L", f"{total_contrib:+.2%}", accent=perf_accent), unsafe_allow_html=True)
+            pc2.markdown(_stat_card("WIN / LOSE", f"{n_win} / {n_lose}", accent="#00e5ff"), unsafe_allow_html=True)
+            pc3.markdown(_stat_card("BEST", f"{best['return_pct']:+.1%}", sub=best["ticker"], accent="#00ff88"), unsafe_allow_html=True)
+            pc4.markdown(_stat_card("WORST", f"{worst['return_pct']:+.1%}", sub=worst["ticker"], accent="#ff3060"), unsafe_allow_html=True)
+
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+            perf_display = perf_df.copy()
+            perf_display["return_pct"] = perf_display["return_pct"].map(lambda x: f"{x:+.2%}")
+            perf_display["pnl_contrib"] = perf_display["pnl_contrib"].map(lambda x: f"{x:+.2%}")
+            perf_display["weight"] = perf_display["weight"].map(lambda x: f"{x:.1%}")
+            perf_display["entry_price"] = perf_display["entry_price"].map(lambda x: f"{x:.2f}")
+            perf_display["current_price"] = perf_display["current_price"].map(lambda x: f"{x:.2f}")
+            perf_display.columns = ["Ticker", "Entry Date", "Days", "Entry", "Current", "Return", "Weight", "P&L Contrib"]
+            st.dataframe(perf_display, width="stretch", hide_index=True)
 
         # score distribution
         if not scores.empty:
@@ -757,6 +802,33 @@ def run_dashboard():
                     entry_sig  = row.get("entry_signal", False)
                     signal_txt = "ENTRY SIGNAL ●" if entry_sig else "NO SIGNAL ○"
                     signal_c   = "#00ff88" if entry_sig else "#5a9abb"
+
+                    # Position performance for held stocks
+                    perf_html = ""
+                    if in_portfolio and not is_mock and DB_PATH.exists():
+                        try:
+                            _conn = get_conn()
+                            import datetime as _dt
+                            _sel_port = portfolio[portfolio["ticker"] == selected]
+                            _sel_perf = get_position_performance(_conn, _sel_port, _dt.date.today().isoformat())
+                            if not _sel_perf.empty:
+                                _pr = _sel_perf.iloc[0]
+                                _ret_c = "#00ff88" if _pr["return_pct"] >= 0 else "#ff3060"
+                                perf_html = (
+                                    f'<div style="border-top:1px solid #0d2a4a;margin-top:10px;padding-top:8px">'
+                                    f'<div style="font-family:\'Share Tech Mono\',monospace;font-size:0.65rem;'
+                                    f'color:#4a8aac;letter-spacing:0.2em;margin-bottom:6px">PERFORMANCE</div>'
+                                    f'<div style="font-size:0.72rem;color:#7aacc0;margin-bottom:3px">'
+                                    f'Entry: {_pr["entry_price"]:.2f} → {_pr["current_price"]:.2f}</div>'
+                                    f'<div style="font-family:\'Share Tech Mono\',monospace;font-size:1.1rem;'
+                                    f'color:{_ret_c}">{_pr["return_pct"]:+.2%}</div>'
+                                    f'<div style="font-size:0.65rem;color:#4a8aac;margin-top:2px">'
+                                    f'{_pr["holding_days"]}d held · since {_pr["entry_date"]}</div>'
+                                    f'</div>'
+                                )
+                        except Exception:
+                            pass
+
                     st.markdown(
                         f'<div style="background:#070d1a;border:1px solid #0d2a4a;border-radius:2px;'
                         f'padding:14px;margin-top:14px">'
@@ -766,6 +838,7 @@ def run_dashboard():
                         f'color:{status_c};margin-bottom:6px">{status_txt}</div>'
                         f'<div style="font-family:\'Share Tech Mono\',monospace;font-size:0.85rem;'
                         f'color:{signal_c}">{signal_txt}</div>'
+                        f'{perf_html}'
                         f'</div>',
                         unsafe_allow_html=True,
                     )
