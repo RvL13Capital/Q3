@@ -1,5 +1,3 @@
 snapshot_date,ticker,weight,composite_score,kelly_25pct,bucket_id,is_new_position,rationale
-2026-03-16,VRT,0.0256,0.589,0.0256,ai_infra,True,
-2026-03-16,SAAB-B.ST,0.021,0.3618,0.021,defense,True,
-2026-03-16,ESLT,0.042,0.5467,0.042,defense,True,
-2026-03-16,LDO.MI,0.0611,0.6781,0.0611,defense,True,
+2026-03-23,VRT,0.0277,0.6065,0.0277,ai_infra,True,
+2026-03-23,MYRG,0.0262,0.4965,0.0262,grid,True,

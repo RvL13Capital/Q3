@@ -1,5 +1,5 @@
 ticker,fiscal_year,report_date,revenue,gross_profit,ebit,net_income,interest_expense,tax_expense,total_assets,total_equity,total_debt,cash,goodwill,intangible_assets,right_of_use_assets,lease_liabilities,capex,gross_margin,invested_capital,nopat,roic,effective_tax_rate,currency,accounting_std,source,fetched_at,t_k
-NNE,2022,,,,,,,,,2109676.0,,,,,,,,,,,,0.21,USD,GAAP,edgar,2026-03-16 09:55:57.838489,
-NNE,2023,,,,,-6250401.0,,,7233652.0,2008647.0,,,,,,,,,,,,0.21,USD,GAAP,edgar,2026-03-16 09:55:57.838489,
-NNE,2024,,,,,-10151556.0,,,35096170.0,31607456.0,,28507257.0,,,,,1700000.0,,,,,0.21,USD,GAAP,edgar,2026-03-16 09:55:57.838489,
-NNE,2025,,,,,-40067076.0,,,228656866.0,222568728.0,,203265052.0,,,,,8449332.0,,,,,0.21,USD,GAAP,edgar,2026-03-16 09:55:57.838489,
+NNE,2022,,,,,,,,,2109676.0,,,,,,,,,,,,0.21,USD,GAAP,edgar,2026-03-23 09:56:06.123052,
+NNE,2023,,,,,-6250401.0,,,7233652.0,2008647.0,,,,,,,,,,,,0.21,USD,GAAP,edgar,2026-03-23 09:56:06.123052,
+NNE,2024,,,,,-10151556.0,,,35096170.0,31607456.0,,28507257.0,,,,,1700000.0,,,,,0.21,USD,GAAP,edgar,2026-03-23 09:56:06.123052,
+NNE,2025,,,,,-40067076.0,,,228656866.0,222568728.0,,203265052.0,,,,,8449332.0,,,,,0.21,USD,GAAP,edgar,2026-03-23 09:56:06.123052,
