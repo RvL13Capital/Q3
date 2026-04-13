@@ -1,4 +1,3 @@
 snapshot_date,ticker,weight,composite_score,kelly_25pct,bucket_id,is_new_position,rationale
-2026-04-06,BESI.AS,0.0448,0.6481,0.0448,ai_infra,True,
-2026-04-06,MYRG,0.0619,0.5016,0.0619,grid,True,
-2026-04-06,DRS,0.0284,0.5444,0.0284,defense,True,
+2026-04-13,ESLT,0.0551,0.668,0.0551,defense,True,
+2026-04-13,TSM,0.08,0.714,0.1453,ai_infra,True,
