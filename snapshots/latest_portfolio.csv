@@ -1,3 +1,2 @@
 snapshot_date,ticker,weight,composite_score,kelly_25pct,bucket_id,is_new_position,rationale
-2026-04-13,ESLT,0.0551,0.668,0.0551,defense,True,
-2026-04-13,TSM,0.08,0.714,0.1453,ai_infra,True,
+2026-04-20,TSM,0.08,0.7631,0.2034,ai_infra,True,
